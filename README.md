@@ -10,6 +10,7 @@ Panel privado para gestionar una cuenta de WhatsApp. Esta primera fase implement
 - Contraseñas protegidas con Argon2id.
 - Auditoría de creación del administrador inicial, inicio y cierre de sesión.
 - Prisma, migración inicial, pruebas, Docker y configuración de Railway.
+- Worker persistente para vincular WhatsApp por QR e importar contactos y mensajes nuevos de texto.
 
 ## Desarrollo local
 
@@ -46,17 +47,19 @@ npm run build
 | `INITIAL_ADMIN_NAME` | Nombre del primer administrador. |
 | `NODE_ENV` | `development` o `production`. |
 | `PORT` | Puerto proporcionado por Railway; la aplicación lo usa automáticamente. |
+| `WA_AUTH_DIR` | Ruta de la sesión vinculada. En Railway: `/data/wa-auth`. |
+| `LOG_LEVEL` | Nivel de log técnico; nunca registra mensajes, QR, números completos ni tokens. |
 
 ## Despliegue en Railway
 
 1. Crea un proyecto Railway desde este repositorio privado y selecciona la rama `main` cuando la fase se integre.
 2. Railway detectará el `Dockerfile` y construirá la aplicación.
-3. Añade un volumen de **1 GB** y móntalo en `/data`.
-4. Configura `DATABASE_URL=file:/data/app.db` y el resto de variables de entorno requeridas.
+3. Añade un volumen de **1 GB** y móntalo en `/data`. Usa una sola réplica: la sesión vinculada no admite varios workers simultáneos.
+4. Configura `DATABASE_URL=file:/data/app.db`, `WA_AUTH_DIR=/data/wa-auth` y el resto de variables de entorno requeridas.
 5. Configura `/api/health` como *healthcheck*; `railway.toml` ya lo declara.
 6. En cada arranque, el contenedor valida las variables, aplica migraciones y crea el administrador inicial de forma idempotente antes de iniciar Next.js.
 
-El volumen no se monta durante el build: las migraciones se ejecutan únicamente al arrancar el contenedor. Railway debe conservar `/data` entre despliegues para la base de datos y, en la próxima fase, para la sesión vinculada de WhatsApp.
+El volumen no se monta durante el build: las migraciones se ejecutan únicamente al arrancar el contenedor. Railway debe conservar `/data` entre despliegues para la base de datos y la sesión vinculada. El worker no sincroniza historial completo: importa contactos y mensajes nuevos tras la vinculación; no descarga medios ni envía mensajes.
 
 ## Seguridad de datos
 

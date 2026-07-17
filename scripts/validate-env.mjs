@@ -6,3 +6,6 @@ if (missing.length) {
 if (process.env.AUTH_SECRET.length < 32) {
   throw new Error("AUTH_SECRET debe contener al menos 32 caracteres.");
 }
+if (!process.env.WA_AUTH_DIR) {
+  throw new Error("WA_AUTH_DIR es obligatorio y debe estar dentro del volumen persistente /data en Railway.");
+}

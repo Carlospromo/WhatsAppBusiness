@@ -1,6 +1,6 @@
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache libc6-compat python3 make g++
+RUN apk add --no-cache libc6-compat git python3 make g++
 
 FROM base AS dependencies
 COPY package.json ./
@@ -19,6 +19,8 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/worker.ts ./worker.ts
+COPY --from=builder /app/lib ./lib
 RUN chmod +x ./scripts/start.sh
 EXPOSE 3000
 CMD ["./scripts/start.sh"]
