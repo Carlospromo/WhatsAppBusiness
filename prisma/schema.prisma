@@ -31,6 +31,13 @@ enum MessageDirection {
   OUTBOUND
 }
 
+enum OutboundMessageStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
 model User {
   id           String     @id @default(cuid())
   email        String     @unique
@@ -39,6 +46,7 @@ model User {
   role         Role       @default(AGENT)
   sessions     Session[]
   auditLogs    AuditLog[]
+  outboundRequests OutboundMessageRequest[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -103,11 +111,30 @@ model Conversation {
   lastMessagePreview String?
   unreadCount        Int              @default(0)
   messages           Message[]
+  outboundRequests   OutboundMessageRequest[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
   @@index([contactId])
   @@index([lastMessageAt])
+}
+
+model OutboundMessageRequest {
+  id          String                @id @default(cuid())
+  conversationId String
+  requestedById String
+  body        String
+  status      OutboundMessageStatus @default(PENDING)
+  safeError   String?
+  externalId  String?               @unique
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  sentAt      DateTime?
+  conversation Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  requestedBy User                   @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([conversationId])
 }
 
 model Message {

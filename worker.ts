@@ -7,6 +7,7 @@ import { prisma } from "./lib/prisma";
 import { auditConnection, updateConnection } from "./lib/whatsapp/connection";
 import { maskPhone, normalizeWhatsAppMessage } from "./lib/whatsapp/normalize";
 import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
+import { claimNextOutboundRequest, completeOutboundRequest, failOutboundRequest } from "./lib/whatsapp/outbound";
 
 const authDir = process.env.WA_AUTH_DIR || "/data/wa-auth";
 let shuttingDown = false;
@@ -67,9 +68,17 @@ async function connect() {
 
 let socket: Awaited<ReturnType<typeof connect>> | undefined;
 void connect().then((instance) => { socket = instance; });
+let processingOutbound = false;
+async function processOutbound() {
+  if (processingOutbound || !socket?.user) return;
+  processingOutbound = true;
+  try { const request = await claimNextOutboundRequest(); if (!request) return; try { const sent = await socket.sendMessage(request.conversation.jid, { text: request.body }); const externalId = sent?.key.id; if (!externalId) throw new Error("missing message id"); await completeOutboundRequest(request, externalId); } catch { await failOutboundRequest(request.id); } } finally { processingOutbound = false; }
+}
+const outboundTimer = setInterval(() => { void enqueue(processOutbound); }, 1_500);
 
 async function shutdown() {
   shuttingDown = true;
+  clearInterval(outboundTimer);
   try { await socket?.end(undefined); } catch { /* conexión ya cerrada */ }
   await prisma.$disconnect();
   process.exit(0);
