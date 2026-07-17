@@ -1,6 +1,6 @@
 # WhatsAppBusiness
 
-Panel privado para gestionar una cuenta de WhatsApp. Esta primera fase implementa la base segura del proyecto; todavía no conecta con WhatsApp ni incorpora la bandeja de mensajes.
+Panel privado para gestionar una cuenta de WhatsApp. La Fase 3 incorpora una bandeja web y agenda de contactos sobre la sincronización persistente de WhatsApp.
 
 ## Contenido de la Fase 1
 
@@ -11,6 +11,15 @@ Panel privado para gestionar una cuenta de WhatsApp. Esta primera fase implement
 - Auditoría de creación del administrador inicial, inicio y cierre de sesión.
 - Prisma, migración inicial, pruebas, Docker y configuración de Railway.
 - Worker persistente para vincular WhatsApp por QR e importar contactos y mensajes nuevos de texto.
+- Bandeja responsive de conversaciones, filtros, búsqueda y contador de no leídos.
+- Agenda de contactos sincronizados y envío manual de texto desde conversaciones existentes.
+- Cola persistente en SQLite: la web solicita el envío y el worker lo procesa una sola vez.
+
+## Uso de la bandeja
+
+En `/dashboard` se pueden buscar y filtrar conversaciones. Al abrir una, `ADMIN` y `AGENT` pueden marcar entradas como leídas y solicitar mensajes de texto; `VIEWER` solo tiene acceso de lectura. La agenda está disponible en `/dashboard/contactos`.
+
+La Fase 3 se limita a texto manual en conversaciones ya existentes: no admite medios, difusión, automatizaciones, respuestas automáticas, asignaciones, notas internas ni IA.
 
 ## Desarrollo local
 
@@ -54,7 +63,7 @@ npm run build
 
 1. Crea un proyecto Railway desde este repositorio privado y selecciona la rama `main` cuando la fase se integre.
 2. Railway detectará el `Dockerfile` y construirá la aplicación.
-3. Añade un volumen de **1 GB** y móntalo en `/data`. Usa una sola réplica: la sesión vinculada no admite varios workers simultáneos.
+3. Añade un volumen de **1 GB** y móntalo en `/data`. Usa una sola réplica: la sesión vinculada y la cola de envíos no admiten varios workers simultáneos.
 4. Configura `DATABASE_URL=file:/data/app.db`, `WA_AUTH_DIR=/data/wa-auth` y el resto de variables de entorno requeridas.
 5. Configura `/api/health` como *healthcheck*; `railway.toml` ya lo declara.
 6. En cada arranque, el contenedor valida las variables, aplica migraciones y crea el administrador inicial de forma idempotente antes de iniciar Next.js.

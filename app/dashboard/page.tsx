@@ -1,12 +1,12 @@
 import Link from "next/link";
+import { getCurrentUser } from "@/lib/auth";
+import { listConversations } from "@/lib/inbox";
+import { canSendMessages } from "@/lib/authorization";
+import { prisma } from "@/lib/prisma";
+import { MessageComposer } from "./message-composer";
 
-export default function DashboardPage() {
-  return (
-    <main className="mx-auto max-w-4xl p-6">
-      <h1 className="text-2xl font-semibold">WhatsAppBusiness — Fase 1</h1>
-      <section className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-5">
-        <p className="font-medium text-amber-900">Integración de WhatsApp pendiente</p>
-        <p className="mt-1 text-sm text-amber-800">La base privada, autenticación y roles ya están preparadas para la siguiente fase.</p>
-      </section>
-      <Link className="mt-5 inline-block text-sm font-medium text-emerald-700 underline" href="/dashboard/integracion">Configurar …1893 tokens truncated…3e
-  role === Role.ADMIN || role === Role.AGENT;
+function nameFor(c: { contact: { displayName: string | null; pushName: string | null; phone: string | null } | null; type: string }) { return c.contact?.displayName || c.contact?.pushName || (c.contact?.phone ? `•••• ${c.contact.phone.slice(-4)}` : c.type === "GROUP" ? "Grupo" : "Conversación"); }
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ selected?: string; filter?: string; q?: string }> }) {
+  const params=await searchParams; const user=await getCurrentUser(); const {rows}=await listConversations({filter:params.filter||"all",search:params.q}); const selected=rows.find(c=>c.id===params.selected)||rows[0]; const connection=await prisma.whatsAppConnection.findUnique({where:{id:"default"},select:{status:true}}); const messages=selected?await prisma.message.findMany({where:{conversationId:selected.id},orderBy:{sentAt:"asc"},take:50}):[];
+  return <main className="mx-auto max-w-6xl p-3 sm:p-6"><div className="mb-3 flex justify-between"><h1 className="text-xl font-semibold">Conversaciones</h1><Link href="/dashboard/contactos" className="text-sm font-medium text-emerald-700">Contactos</Link></div><div className="grid min-h-[70vh] grid-cols-1 overflow-hidden rounded-xl border border-slate-200 bg-white md:grid-cols-[20rem_1fr]"><aside className={selected?"hidden border-r md:block":"border-r"}><form className="border-b p-3"><input name="q" defaultValue={params.q} placeholder="Buscar" className="w-full rounded-md border p-2 text-sm"/></form><nav className="flex gap-2 overflow-auto border-b p-2 text-xs">{[["all","Todas"],["unread","No leídas"],["direct","Directas"],["group","Grupos"]].map(([id,label])=><Link key={id} href={`/dashboard?filter=${id}`} className={params.filter===id?"font-semibold text-emerald-700":"text-slate-500"}>{label}</Link>)}</nav>{rows.length?rows.map(c=><Link key={c.id} href={`/dashboard?selected=${c.id}`} className="block border-b p-3 hover:bg-slate-50"><div className="flex justify-between gap-2"><strong className="truncate text-sm">{nameFor(c)}</strong>{c.unreadCount>0&&<span className="rounded-full bg-emerald-700 px-2 text-xs text-white">{c.unreadCount}</span>}</div><p className="truncate text-xs text-slate-500">{c.lastMessagePreview||"Sin texto"}</p></Link>):<p className="p-4 text-sm text-slate-500">Aún no hay conversaciones.</p>}</aside><section className={selected?"flex min-h-[70vh] flex-col":"hidden md:flex md:items-center md:justify-center"}>{selected?<><header className="border-b p-4"><Link href="/dashboard" className="mr-3 text-sm text-emerald-700 md:hidden">←</Link><strong>{nameFor(selected)}</strong></header><div className="flex-1 space-y-2 overflow-auto bg-slate-50 p-4">{messages.map(m=><div key={m.id} className={m.direction==="OUTBOUND"?"ml-auto max-w-[80%] rounded-lg bg-emerald-100 p-3 text-sm":"max-w-[80%] rounded-lg bg-white p-3 text-sm shadow-sm"}><p className="whitespace-pre-wrap break-words">{m.body}</p><time className="mt-1 block text-right text-[10px] text-slate-500">{m.sentAt.toLocaleString("es-ES")}</time></div>)}</div><MessageComposer conversationId={selected.id} enabled={Boolean(user&&canSendMessages(user.role)&&connection?.status==="CONNECTED")}/></>:<p className="text-slate-500">Selecciona una conversación.</p>}</section></div></main>;
+}
