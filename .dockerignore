@@ -1,0 +1,13 @@
+node_modules
+.next
+.npm-cache
+.git
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+/data
+/auth_store
+/wa-auth
+coverage

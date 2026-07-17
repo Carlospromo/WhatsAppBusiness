@@ -13,6 +13,24 @@ enum Role {
   VIEWER
 }
 
+enum WhatsAppConnectionStatus {
+  DISCONNECTED
+  WAITING_FOR_QR
+  CONNECTING
+  CONNECTED
+  ERROR
+}
+
+enum ConversationType {
+  DIRECT
+  GROUP
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
 model User {
   id           String     @id @default(cuid())
   email        String     @unique
@@ -49,4 +67,61 @@ model AuditLog {
 
   @@index([userId])
   @@index([createdAt])
+}
+
+model WhatsAppConnection {
+  id                 String                   @id @default("default")
+  status             WhatsAppConnectionStatus @default(DISCONNECTED)
+  qrCode             String?
+  qrExpiresAt        DateTime?
+  accountJid         String?
+  maskedPhone        String?
+  lastError          String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+}
+
+model Contact {
+  id           String         @id @default(cuid())
+  jid          String         @unique
+  phone        String?
+  displayName  String?
+  pushName     String?
+  syncedAt     DateTime       @default(now())
+  conversations Conversation[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model Conversation {
+  id                 String           @id @default(cuid())
+  jid                String           @unique
+  type               ConversationType
+  contactId          String?
+  contact            Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  unreadCount        Int              @default(0)
+  messages           Message[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([contactId])
+  @@index([lastMessageAt])
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  externalId     String           @unique
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      MessageDirection
+  senderJid      String
+  body           String?
+  messageType    String
+  sentAt         DateTime
+  importedAt     DateTime         @default(now())
+  isRead         Boolean          @default(false)
+
+  @@index([conversationId, sentAt])
 }
