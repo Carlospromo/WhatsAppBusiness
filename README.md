@@ -14,12 +14,19 @@ Panel privado para gestionar una cuenta de WhatsApp. La Fase 3 incorpora una ban
 - Bandeja responsive de conversaciones, filtros, búsqueda y contador de no leídos.
 - Agenda de contactos sincronizados y envío manual de texto desde conversaciones existentes.
 - Cola persistente en SQLite: la web solicita el envío y el worker lo procesa una sola vez.
+- Gestión colaborativa: asignación de conversaciones, notas internas y etiquetas de clasificación.
 
 ## Uso de la bandeja
 
 En `/dashboard` se pueden buscar y filtrar conversaciones. Al abrir una, `ADMIN` y `AGENT` pueden marcar entradas como leídas y solicitar mensajes de texto; `VIEWER` solo tiene acceso de lectura. La agenda está disponible en `/dashboard/contactos`.
 
 La Fase 3 se limita a texto manual en conversaciones ya existentes: no admite medios, difusión, automatizaciones, respuestas automáticas, asignaciones, notas internas ni IA.
+
+## Colaboración y permisos
+
+`ADMIN` puede asignar conversaciones, administrar etiquetas y eliminar notas. `AGENT` puede asignarse conversaciones, gestionar etiquetas existentes y escribir notas. `VIEWER` tiene acceso de solo lectura. Las notas y etiquetas son datos internos: nunca se envían a WhatsApp ni son procesadas por el worker.
+
+La aplicación sigue sin automatizaciones, IA, campañas, respuestas automáticas ni medios.
 
 ## Desarrollo local
 
