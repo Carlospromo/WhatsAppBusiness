@@ -14,12 +14,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "db:import-legacy-sqlite": "tsx scripts/import-legacy-sqlite.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",
+    "@types/better-sqlite3": "^7.6.13",
     "@whiskeysockets/baileys": "^6.7.16",
     "argon2": "^0.44.0",
+    "better-sqlite3": "^12.4.1",
     "concurrently": "^10.0.3",
     "dotenv": "^17.4.2",
     "next": "^15.5.9",

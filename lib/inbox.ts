@@ -14,21 +14,22 @@ export function validateMessageBody(value: unknown) {
   return body.length > 0 && body.length <= textLimit ? body : null;
 }
 
-export async function listConversations(query: { search?: string; filter?: string; cursor?: string }) {
+export async function listConversations(query: { accountIds: string[]; accountId?: string; search?: string; filter?: string; cursor?: string }) {
   const search = query.search?.trim().slice(0, 100);
   const where = {
+    accountId: query.accountId ?? { in: query.accountIds },
     ...(query.filter === "unread" ? { unreadCount: { gt: 0 } } : {}),
     ...(query.filter === "direct" ? { type: ConversationType.DIRECT } : {}),
     ...(query.filter === "group" ? { type: ConversationType.GROUP } : {}),
     ...(search ? { OR: [{ contact: { displayName: { contains: search } } }, { contact: { pushName: { contains: search } } }, { contact: { phone: { contains: search } } }] } : {}),
   };
-  const rows = await prisma.conversation.findMany({ where, include: { contact: true }, orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }], take: pageSize + 1, ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}) });
+  const rows = await prisma.conversation.findMany({ where, include: { contact: true, account: { select: { id: true, name: true, slug: true } } }, orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }], take: pageSize + 1, ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}) });
   const next = rows.length > pageSize ? rows.pop()!.id : null;
   return { rows, nextCursor: next };
 }
 
-export async function queueOutboundMessage(conversationId: string, userId: string, body: string) {
-  return prisma.outboundMessageRequest.create({ data: { conversationId, requestedById: userId, body, status: OutboundMessageStatus.PENDING } });
+export async function queueOutboundMessage(conversationId: string, accountId: string, userId: string, body: string) {
+  return prisma.outboundMessageRequest.create({ data: { accountId, conversationId, requestedById: userId, body, status: OutboundMessageStatus.PENDING } });
 }
 
 export { MessageDirection, OutboundMessageStatus };

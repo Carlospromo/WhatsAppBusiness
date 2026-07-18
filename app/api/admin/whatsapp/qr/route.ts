@@ -3,9 +3,10 @@ import QRCode from "qrcode";
 import { requireAdminApi } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
-export async function GET() {
+export async function GET(request: Request) {
   if (!(await requireAdminApi())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const connection = await prisma.whatsAppConnection.findUnique({ where: { id: "default" } });
+  const accountId = new URL(request.url).searchParams.get("accountId"); if (!accountId) return NextResponse.json({ error: "qr_unavailable" }, { status: 404 });
+  const connection = await prisma.whatsAppConnection.findUnique({ where: { accountId } });
   if (!connection?.qrCode || !connection.qrExpiresAt || connection.qrExpiresAt <= new Date()) {
     return NextResponse.json({ error: "qr_unavailable" }, { status: 404 });
   }
