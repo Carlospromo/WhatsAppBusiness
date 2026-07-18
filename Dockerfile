@@ -20,6 +20,7 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/worker.ts ./worker.ts
 COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 RUN chmod +x ./scripts/start.sh
 EXPOSE 3000
 CMD ["./scripts/start.sh"]
