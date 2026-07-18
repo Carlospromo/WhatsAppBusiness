@@ -33,29 +33,46 @@ async function connect(accountId: string) {
   if (stopping || connecting.has(accountId) || sockets.has(accountId)) return;
   if (!(await isAccountActive(accountId))) return;
   connecting.add(accountId);
+  let socket: Awaited<ReturnType<typeof makeWASocket>> | undefined;
   try {
     await mkdir(authPath(accountId), { recursive: true });
     await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTING, qrCode: null, qrExpiresAt: null, lastError: null });
     const { state, saveCreds } = await useMultiFileAuthState(authPath(accountId));
     const { version } = await fetchLatestBaileysVersion();
-    const socket = makeWASocket({ version, auth: state, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false });
-    sockets.set(accountId, socket);
-    socket.ev.on("creds.update", saveCreds);
-    socket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
-    socket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
-    socket.ev.on("messages.upsert", ({ messages, type }) => { if (type === "notify") void enqueueAccountWork(accountId, async () => { for (const raw of messages) { const message = normalizeWhatsAppMessage(raw); if (message) await persistMessage(accountId, message); } }); });
-    socket.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
-      if (qr) { if (!(await isAccountActive(accountId))) { await socket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
-      if (connection === "open") { if (!(await isAccountActive(accountId))) { await socket.end(undefined); return; } const jid = socket.user?.id ?? null; await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null }); await auditConnection(accountId, "WHATSAPP_CONNECTED"); }
+    const activeSocket = makeWASocket({ version, auth: state, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false });
+    socket = activeSocket;
+    sockets.set(accountId, activeSocket);
+    activeSocket.ev.on("creds.update", saveCreds);
+    activeSocket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
+    activeSocket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
+    activeSocket.ev.on("messages.upsert", ({ messages, type }) => { if (type === "notify") void enqueueAccountWork(accountId, async () => { for (const raw of messages) { const message = normalizeWhatsAppMessage(raw); if (message) await persistMessage(accountId, message); } }); });
+    activeSocket.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+      if (sockets.get(accountId) !== activeSocket) return;
+      if (qr) { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
+      if (connection === "open") { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } const jid = activeSocket.user?.id ?? null; await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null }); await auditConnection(accountId, "WHATSAPP_CONNECTED"); }
       if (connection === "close") { sockets.delete(accountId); if (stopping || !(await isAccountActive(accountId))) return; const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode; if (code === DisconnectReason.loggedOut) { await updateConnection(accountId, { status: WhatsAppConnectionStatus.DISCONNECTED, qrCode: null, qrExpiresAt: null, lastError: "Sesión desvinculada." }); await auditConnection(accountId, "WHATSAPP_DISCONNECTED"); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "Conexión interrumpida; reintentando." }); await auditConnection(accountId, "WHATSAPP_CONNECTION_ERROR"); setTimeout(() => void connect(accountId), 5_000); }
     });
+  } catch {
+    if (socket && sockets.get(accountId) === socket) sockets.delete(accountId);
+    if (!stopping && await isAccountActive(accountId)) {
+      await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "No se pudo iniciar la conexión; se reintentará." });
+      await auditConnection(accountId, "WHATSAPP_CONNECTION_ERROR");
+      setTimeout(() => void connect(accountId), 5_000);
+    }
   } finally { connecting.delete(accountId); }
 }
 
 async function syncAccounts() {
-  const accounts = await prisma.whatsAppAccount.findMany({ where: { isActive: true }, select: { id: true } });
+  const accounts = await prisma.whatsAppAccount.findMany({ where: { isActive: true }, select: { id: true, connection: { select: { status: true } } } });
   const allowed = new Set(accounts.map((account) => account.id));
-  for (const account of accounts) void connect(account.id);
+  for (const account of accounts) {
+    const socket = sockets.get(account.id);
+    if (socket && account.connection?.status === WhatsAppConnectionStatus.DISCONNECTED) {
+      sockets.delete(account.id);
+      try { await socket.end(undefined); } catch { /* already closed */ }
+    }
+    void connect(account.id);
+  }
   for (const [id, socket] of sockets) if (!allowed.has(id)) { sockets.delete(id); try { await socket.end(undefined); } catch { /* already closed */ } }
 }
 
@@ -69,7 +86,7 @@ async function processOutbound() {
 }
 
 void syncAccounts();
-const accountsTimer = setInterval(() => void syncAccounts(), 15_000);
+const accountsTimer = setInterval(() => void syncAccounts(), 5_000);
 const outboundTimer = setInterval(() => void processOutbound(), 1_500);
 async function shutdown() { stopping = true; clearInterval(accountsTimer); clearInterval(outboundTimer); for (const socket of sockets.values()) try { await socket.end(undefined); } catch { /* ignore */ } await prisma.$disconnect(); process.exit(0); }
 process.once("SIGTERM", shutdown); process.once("SIGINT", shutdown);
