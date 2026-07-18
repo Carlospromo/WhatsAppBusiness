@@ -1,7 +1,7 @@
 import { WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
-export async function updateConnection(data: {
+export async function updateConnection(accountId: string, data: {
   status: WhatsAppConnectionStatus;
   qrCode?: string | null;
   qrExpiresAt?: Date | null;
@@ -10,12 +10,12 @@ export async function updateConnection(data: {
   lastError?: string | null;
 }) {
   return prisma.whatsAppConnection.upsert({
-    where: { id: "default" },
-    create: { id: "default", ...data },
+    where: { accountId },
+    create: { accountId, ...data },
     update: data,
   });
 }
 
-export async function auditConnection(action: string) {
-  await prisma.auditLog.create({ data: { action, entity: "WhatsAppConnection", entityId: "default" } });
+export async function auditConnection(accountId: string, action: string) {
+  await prisma.auditLog.create({ data: { accountId, action, entity: "WhatsAppConnection", entityId: accountId } });
 }

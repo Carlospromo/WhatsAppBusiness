@@ -85,3 +85,15 @@ El volumen no se monta durante el build: las migraciones se ejecutan únicamente
 ## Seguridad de datos
 
 No versionar ni compartir nunca `.env`, `dev.db`, `/data`, sesiones de WhatsApp ni credenciales. Todos están incluidos en `.gitignore`. Usa secretos de Railway para producción y realiza copias de seguridad del volumen antes de cambios importantes.
+
+## Fase 6: múltiples cuentas y PostgreSQL
+
+Cada cuenta tiene una sesión, QR, contactos, conversaciones, cola de envíos, etiquetas y estado aislados. Los administradores acceden a todas; agentes y lectores solo a cuentas con membresía. La bandeja permite seleccionar una cuenta o ver todas las autorizadas.
+
+Los datos operativos se guardan en PostgreSQL. En Railway añade un servicio PostgreSQL y configura `DATABASE_URL=${{Postgres.DATABASE_URL}}`. El volumen `/data` solo conserva `WA_AUTH_DIR=/data/wa-auth`; usa una única réplica mientras web y worker se ejecuten en el mismo contenedor.
+
+Para desarrollo local, ejecuta `docker compose -f docker-compose.dev.yml up -d`, configura `.env` y usa `npm run db:migrate`.
+
+### Importación manual desde SQLite
+
+Antes de cambiar una instalación existente, conserva una copia de `app.db`. Tras desplegar PostgreSQL y aplicar migraciones, ejecuta manualmente `LEGACY_SQLITE_DATABASE_URL=file:/ruta/app.db npm run db:import-legacy-sqlite`. El proceso es idempotente, invalida sesiones web y crea la cuenta `Cuenta principal`; no copia la sesión de WhatsApp, por lo que debe vincularse de nuevo con QR. Nunca ejecutes esta importación automáticamente ni elimines la copia SQLite hasta validar usuarios, conversaciones y mensajes.
