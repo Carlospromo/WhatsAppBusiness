@@ -15,6 +15,7 @@ Panel privado para gestionar una cuenta de WhatsApp. La Fase 3 incorpora una ban
 - Agenda de contactos sincronizados y envío manual de texto desde conversaciones existentes.
 - Cola persistente en SQLite: la web solicita el envío y el worker lo procesa una sola vez.
 - Gestión colaborativa: asignación de conversaciones, notas internas y etiquetas de clasificación.
+- Administración segura de usuarios, auditoría consultable y estado operativo del MVP.
 
 ## Uso de la bandeja
 
@@ -27,6 +28,10 @@ La Fase 3 se limita a texto manual en conversaciones ya existentes: no admite me
 `ADMIN` puede asignar conversaciones, administrar etiquetas y eliminar notas. `AGENT` puede asignarse conversaciones, gestionar etiquetas existentes y escribir notas. `VIEWER` tiene acceso de solo lectura. Las notas y etiquetas son datos internos: nunca se envían a WhatsApp ni son procesadas por el worker.
 
 La aplicación sigue sin automatizaciones, IA, campañas, respuestas automáticas ni medios.
+
+## Administración y operación
+
+Solo `ADMIN` puede gestionar usuarios, consultar auditoría, revisar el estado resumido y depurar logs antiguos de forma manual. Desactivar un usuario invalida sus sesiones. La instalación Railway debe mantenerse en una única réplica y conservar el volumen `/data`.
 
 ## Desarrollo local
 

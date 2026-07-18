@@ -1,0 +1,3 @@
+import { requireRole } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+export default async function UsersPage(){await requireRole("ADMIN");const users=await prisma.user.findMany({select:{id:true,name:true,email:true,role:true,isActive:true,createdAt:true},orderBy:{createdAt:"desc"}});return <main className="mx-auto max-w-4xl p-6"><h1 className="text-xl font-semibold">Usuarios</h1><div className="mt-4 rounded-xl border">{users.map(u=><div className="flex justify-between border-b p-4 last:border-0" key={u.id}><div><p className="font-medium">{u.name}</p><p className="text-sm text-slate-500">{u.email} · {u.role}</p></div><span className={u.isActive?"text-emerald-700":"text-slate-500"}>{u.isActive?"Activo":"Desactivado"}</span></div>)}</div></main>;}

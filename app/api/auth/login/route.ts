@@ -11,7 +11,7 @@ export async function POST(request: Request) {
 
   const user = await prisma.user.findUnique({ where: { email } });
   const valid = user ? await verifyPassword(user.passwordHash, password) : false;
-  if (!user || !valid) return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
+  if (!user || !user.isActive || !valid) return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
 
   await createSession(user.id);
   await prisma.auditLog.create({ data: { userId: user.id, action: "LOGIN", entity: "Session" } });

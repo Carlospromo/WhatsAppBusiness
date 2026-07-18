@@ -1,0 +1,4 @@
+import { NextResponse } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+export async function POST(request:Request){const me=await getCurrentUser();if(!me)return NextResponse.json({error:"No autorizado"},{status:401});if(me.role!=="ADMIN")return NextResponse.json({error:"Prohibido"},{status:403});const b=await request.json().catch(()=>({}));const before=new Date(b.before);if(b.confirm!==true||Number.isNaN(before.getTime())||before>=new Date())return NextResponse.json({error:"Confirmación o fecha inválida"},{status:400});const result=await prisma.auditLog.deleteMany({where:{createdAt:{lt:before}}});await prisma.auditLog.create({data:{userId:me.id,action:"AUDIT_LOGS_PURGED",entity:"AuditLog",metadata:JSON.stringify({count:result.count})}});return NextResponse.json({deleted:result.count});}

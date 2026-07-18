@@ -1,0 +1,7 @@
+import { NextResponse } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { hashPassword } from "@/lib/password";
+import { prisma } from "@/lib/prisma";
+import { requireAdminRole, validUserInput } from "@/lib/admin";
+export async function GET(){const me=await getCurrentUser();if(!me)return NextResponse.json({error:"No autorizado"},{status:401});if(!requireAdminRole(me.role))return NextResponse.json({error:"Prohibido"},{status:403});return NextResponse.json(await prisma.user.findMany({select:{id:true,name:true,email:true,role:true,isActive:true,createdAt:true},orderBy:{createdAt:"desc"}}));}
+export async function POST(request:Request){const me=await getCurrentUser();if(!me)return NextResponse.json({error:"No autorizado"},{status:401});if(!requireAdminRole(me.role))return NextResponse.json({error:"Prohibido"},{status:403});const input=validUserInput(await request.json().catch(()=>null));if(!input)return NextResponse.json({error:"Datos inválidos"},{status:400});try{const user=await prisma.user.create({data:{email:input.email,name:input.name,role:input.role,passwordHash:await hashPassword(input.password)},select:{id:true,name:true,email:true,role:true,isActive:true,createdAt:true}});await prisma.auditLog.create({data:{userId:me.id,action:"USER_CREATED",entity:"User",entityId:user.id}});return NextResponse.json(user,{status:201});}catch{return NextResponse.json({error:"No se pudo crear el usuario"},{status:400});}}
