@@ -97,3 +97,19 @@ Para desarrollo local, ejecuta `docker compose -f docker-compose.dev.yml up -d`,
 ### Importación manual desde SQLite
 
 Antes de cambiar una instalación existente, conserva una copia de `app.db`. Tras desplegar PostgreSQL y aplicar migraciones, ejecuta manualmente `LEGACY_SQLITE_DATABASE_URL=file:/ruta/app.db npm run db:import-legacy-sqlite`. El proceso es idempotente, invalida sesiones web y crea la cuenta `Cuenta principal`; no copia la sesión de WhatsApp, por lo que debe vincularse de nuevo con QR. Nunca ejecutes esta importación automáticamente ni elimines la copia SQLite hasta validar usuarios, conversaciones y mensajes.
+
+## Fase 7: agenda híbrida
+
+La agenda se almacena en PostgreSQL y está aislada por cuenta de WhatsApp. Combina tres orígenes:
+
+- **Importado**: contactos cargados por un administrador desde CSV UTF-8 o Excel XLSX.
+- **Sincronizado**: contactos técnicos que Baileys ya conoce desde WhatsApp Web.
+- **Externo**: números nuevos que escriben un mensaje directo y no estaban en la agenda.
+
+Los datos importados son siempre los visibles y no se sobrescriben con `pushName` ni otros metadatos de WhatsApp. Los datos de WhatsApp se conservan solamente para enlazar conversaciones e identidades técnicas.
+
+Un administrador puede descargar la plantilla, crear una vista previa y confirmar la importación desde `/dashboard/administracion/agenda/importar`. La plantilla usa las columnas `nombre`, `telefono`, `apellidos`, `email`, `empresa` y `etiquetas`; solo `nombre` y `telefono` son obligatorios. El archivo no se conserva tras el análisis. El país de normalización se configura por cuenta, inicialmente `ES`.
+
+La acción **Sincronizar contactos ya existentes** reconcilia de forma idempotente los contactos técnicos ya guardados, sin solicitar historial completo a WhatsApp ni realizar comprobaciones masivas de números. `ADMIN` importa y reconcilia; `AGENT` puede consultar y enlazar un contacto existente en sus cuentas; `VIEWER` solo lee.
+
+No subas ni versionas archivos de agenda, `.env`, datos de PostgreSQL, QR o sesiones. La aplicación no conserva el fichero importado en `/data`; ese volumen sigue reservado exclusivamente para `WA_AUTH_DIR=/data/wa-auth` y se mantiene una sola réplica Railway.
