@@ -47,6 +47,8 @@ model User {
   sessions     Session[]
   auditLogs    AuditLog[]
   outboundRequests OutboundMessageRequest[]
+  assignedConversations Conversation[] @relation("ConversationAssignee")
+  notes ConversationNote[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -110,13 +112,41 @@ model Conversation {
   lastMessageAt      DateTime?
   lastMessagePreview String?
   unreadCount        Int              @default(0)
+  assignedToId       String?
+  assignedTo         User?            @relation("ConversationAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt         DateTime?
   messages           Message[]
   outboundRequests   OutboundMessageRequest[]
+  notes              ConversationNote[]
+  tags               ConversationTag[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
   @@index([contactId])
   @@index([lastMessageAt])
+  @@index([assignedToId])
+}
+
+model ConversationNote {
+  id             String       @id @default(cuid())
+  conversationId String
+  authorId       String
+  body           String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author         User         @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([conversationId, createdAt])
+}
+
+model ConversationTag {
+  id        String         @id @default(cuid())
+  name      String         @unique
+  color     String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  conversations Conversation[]
 }
 
 model OutboundMessageRequest {

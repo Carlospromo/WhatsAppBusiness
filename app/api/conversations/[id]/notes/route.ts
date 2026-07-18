@@ -1,0 +1,6 @@
+import { NextResponse } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { canCollaborate, validNote } from "@/lib/collaboration";
+export async function GET(_:Request,{params}:{params:Promise<{id:string}>}){if(!await getCurrentUser())return NextResponse.json({error:"No autorizado"},{status:401});const {id}=await params;return NextResponse.json(await prisma.conversationNote.findMany({where:{conversationId:id},include:{author:{select:{id:true,name:true}},},orderBy:{createdAt:"asc"}}));}
+export async function POST(request:Request,{params}:{params:Promise<{id:string}>}){const user=await getCurrentUser();if(!user)return NextResponse.json({error:"No autorizado"},{status:401});if(!canCollaborate(user.role))return NextResponse.json({error:"Prohibido"},{status:403});const text=validNote((await request.json().catch(()=>({}))).body);if(!text)return NextResponse.json({error:"Nota inválida"},{status:400});const {id}=await params;const note=await prisma.conversationNote.create({data:{conversationId:id,authorId:user.id,body:text},include:{author:{select:{id:true,name:true}}}});await prisma.auditLog.create({data:{userId:user.id,action:"NOTE_CREATED",entity:"ConversationNote",entityId:note.id}});return NextResponse.json(note,{status:201});}

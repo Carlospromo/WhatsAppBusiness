@@ -1,0 +1,6 @@
+import { NextResponse } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { validNote } from "@/lib/collaboration";
+export async function PATCH(request:Request,{params}:{params:Promise<{id:string}>}){const user=await getCurrentUser();if(!user)return NextResponse.json({error:"No autorizado"},{status:401});const {id}=await params;const note=await prisma.conversationNote.findUnique({where:{id}});if(!note)return NextResponse.json({error:"No encontrada"},{status:404});if(user.role!=="ADMIN"&&note.authorId!==user.id)return NextResponse.json({error:"Prohibido"},{status:403});const body=validNote((await request.json().catch(()=>({}))).body);if(!body)return NextResponse.json({error:"Nota inválida"},{status:400});return NextResponse.json(await prisma.conversationNote.update({where:{id},data:{body}}));}
+export async function DELETE(_:Request,{params}:{params:Promise<{id:string}>}){const user=await getCurrentUser();if(!user)return NextResponse.json({error:"No autorizado"},{status:401});if(user.role!=="ADMIN")return NextResponse.json({error:"Prohibido"},{status:403});const {id}=await params;await prisma.conversationNote.delete({where:{id}});await prisma.auditLog.create({data:{userId:user.id,action:"NOTE_DELETED",entity:"ConversationNote",entityId:id}});return NextResponse.json({ok:true});}
