@@ -113,3 +113,11 @@ Un administrador puede descargar la plantilla, crear una vista previa y confirma
 La acción **Sincronizar contactos ya existentes** reconcilia de forma idempotente los contactos técnicos ya guardados, sin solicitar historial completo a WhatsApp ni realizar comprobaciones masivas de números. `ADMIN` importa y reconcilia; `AGENT` puede consultar y enlazar un contacto existente en sus cuentas; `VIEWER` solo lee.
 
 No subas ni versionas archivos de agenda, `.env`, datos de PostgreSQL, QR o sesiones. La aplicación no conserva el fichero importado en `/data`; ese volumen sigue reservado exclusivamente para `WA_AUTH_DIR=/data/wa-auth` y se mantiene una sola réplica Railway.
+
+## Gestión de cuentas y vinculación desde la web
+
+El menú principal muestra las rutas disponibles para cada rol. Solo un `ADMIN` puede acceder a **Cuentas**, crear cuentas nuevas, conceder o retirar membresías y gestionar su vinculación desde el navegador.
+
+Desde `/dashboard/administracion/cuentas` se crea una cuenta indicando un nombre y un identificador corto. La acción **Desactivar** es recuperable: detiene la conexión operativa de esa cuenta, la oculta del trabajo diario y elimina únicamente el QR temporal. Conserva los datos, mensajes, agenda y sesión de WhatsApp en `/data/wa-auth/<accountId>`. Al reactivarla, el worker vuelve a iniciarla; no existe borrado físico de cuentas ni de sus sesiones desde la interfaz.
+
+Para vincular un número, abre **Vinculación**, selecciona la cuenta y pulsa **Solicitar vinculación**. Cuando aparezca el QR, en el teléfono abre WhatsApp, ve a **Dispositivos vinculados** y escanéalo. El QR solo se sirve a administradores autenticados, no se incorpora a URLs públicas ni se escribe en los registros de la aplicación.

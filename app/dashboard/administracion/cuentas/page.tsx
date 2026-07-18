@@ -1,5 +1,13 @@
 import { Role } from "@prisma/client";
 import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import Link from "next/link";
-export default async function AccountsPage(){await requireRole(Role.ADMIN);const accounts=await prisma.whatsAppAccount.findMany({include:{connection:{select:{status:true,maskedPhone:true,updatedAt:true}},memberships:{select:{userId:true}}},orderBy:{name:"asc"}});return <main className="mx-auto max-w-3xl p-6"><h1 className="text-xl font-semibold">Cuentas de WhatsApp</h1><p className="mt-2 text-sm text-slate-600">Cada cuenta mantiene una sesión y una bandeja aisladas.</p><Link className="mt-4 inline-block text-sm font-medium text-emerald-700" href="/dashboard/integracion">Gestionar vinculación</Link><div className="mt-5 space-y-3">{accounts.map(account=><article key={account.id} className="rounded-lg border p-4"><div className="flex justify-between"><strong>{account.name}</strong><span className="text-xs text-slate-500">{account.isActive?"Activa":"Inactiva"}</span></div><p className="mt-1 text-sm text-slate-600">{account.connection?.status??"DISCONNECTED"}{account.connection?.maskedPhone?` · ${account.connection.maskedPhone}`:""}</p><p className="mt-1 text-xs text-slate-500">{account.memberships.length} usuarios con acceso</p></article>)}{!accounts.length&&<p className="text-sm text-slate-500">Crea la primera cuenta mediante la API de administración.</p>}</div></main>}
+import { AccountManagement } from "./account-management";
+
+export default async function AccountsPage() {
+  await requireRole(Role.ADMIN);
+  const [accounts, users] = await Promise.all([
+    prisma.whatsAppAccount.findMany({ include: { connection: { select: { status: true, maskedPhone: true } }, memberships: { include: { user: { select: { id: true, name: true, email: true, role: true } } } } }, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ where: { isActive: true }, select: { id: true, name: true, email: true, role: true }, orderBy: { name: "asc" } }),
+  ]);
+  return <main className="mx-auto max-w-5xl p-4 sm:p-6"><h1 className="text-xl font-semibold">Gestión de cuentas</h1><p className="mt-2 text-sm text-slate-600">Solo los administradores pueden crear cuentas, conceder accesos o desactivarlas. Desactivar conserva sus datos y sesión para recuperarla después.</p><AccountManagement accounts={accounts} users={users}/></main>;
+}
