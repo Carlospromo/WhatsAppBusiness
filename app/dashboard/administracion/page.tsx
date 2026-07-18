@@ -1,0 +1,3 @@
+import Link from "next/link";
+import { requireRole } from "@/lib/auth";
+export default async function AdminPage(){await requireRole("ADMIN");return <main className="mx-auto max-w-3xl p-6"><h1 className="text-xl font-semibold">Administración</h1><nav className="mt-5 grid gap-3 sm:grid-cols-3"><Link className="rounded-lg border p-4" href="/dashboard/administracion/usuarios">Usuarios</Link><Link className="rounded-lg border p-4" href="/dashboard/administracion/auditoria">Auditoría</Link><Link className="rounded-lg border p-4" href="/dashboard/administracion/estado">Estado</Link></nav></main>;}

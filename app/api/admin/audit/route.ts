@@ -1,0 +1,4 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+export async function GET(request:NextRequest){const me=await getCurrentUser();if(!me)return NextResponse.json({error:"No autorizado"},{status:401});if(me.role!=="ADMIN")return NextResponse.json({error:"Prohibido"},{status:403});const p=request.nextUrl.searchParams;const take=Math.min(Number(p.get("take"))||30,100);const logs=await prisma.auditLog.findMany({where:{...(p.get("action")?{action:p.get("action")!}:{}),...(p.get("entity")?{entity:p.get("entity")!}:{}),...(p.get("entityId")?{entityId:p.get("entityId")!}:{} )},include:{user:{select:{id:true,name:true,email:true}}},orderBy:{createdAt:"desc"},take});return NextResponse.json(logs.map(({metadata,...safe})=>safe));}

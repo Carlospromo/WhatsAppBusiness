@@ -1,0 +1,3 @@
+import { requireRole } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+export default async function AuditPage(){await requireRole("ADMIN");const logs=await prisma.auditLog.findMany({include:{user:{select:{name:true}}},orderBy:{createdAt:"desc"},take:50});return <main className="mx-auto max-w-4xl p-6"><h1 className="text-xl font-semibold">Auditoría</h1><div className="mt-4 rounded-xl border">{logs.length?logs.map(l=><div className="border-b p-3 text-sm" key={l.id}><strong>{l.action}</strong> · {l.entity} · {l.user?.name||"Sistema"}<time className="ml-2 text-slate-500">{l.createdAt.toLocaleString("es-ES")}</time></div>):<p className="p-4 text-slate-500">No hay eventos.</p>}</div></main>;}

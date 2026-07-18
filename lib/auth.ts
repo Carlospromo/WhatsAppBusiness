@@ -28,19 +28,20 @@ export async function destroySession() {
   cookieStore.set(SESSION_COOKIE, "", { ...sessionCookieOptions(), maxAge: 0 });
 }
 
-export async function getCurrentUser(): Promise<Pick<User, "id" | "email" | "name" | "role"> | null> {
+export async function getCurrentUser(): Promise<Pick<User, "id" | "email" | "name" | "role" | "isActive"> | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
   const session = await prisma.session.findUnique({
     where: { tokenHash: hashSessionToken(token) },
-    include: { user: { select: { id: true, email: true, name: true, role: true } } },
+    include: { user: { select: { id: true, email: true, name: true, role: true, isActive: true } } },
   });
   if (!session || session.expiresAt <= new Date()) {
     if (session) await prisma.session.delete({ where: { id: session.id } });
     return null;
   }
+  if (!session.user.isActive) { await prisma.session.delete({ where: { id: session.id } }); return null; }
   return session.user;
 }
 
