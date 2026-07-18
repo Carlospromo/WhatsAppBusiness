@@ -38,6 +38,32 @@ enum OutboundMessageStatus {
   FAILED
 }
 
+enum AddressBookContactOrigin {
+  IMPORTED
+  WHATSAPP_SYNC
+  EXTERNAL
+  MANUAL
+}
+
+enum AddressBookContactStatus {
+  VERIFIED
+  EXTERNAL
+}
+
+enum ContactImportStatus {
+  DRAFT
+  PREVIEWED
+  APPLIED
+  FAILED
+}
+
+enum ContactImportItemAction {
+  CREATE
+  UPDATE
+  SKIP
+  ERROR
+}
+
 model User {
   id                    String                      @id @default(cuid())
   email                 String                      @unique
@@ -52,6 +78,8 @@ model User {
   notes                 ConversationNote[]
   accountMemberships    WhatsAppAccountMembership[]
   createdAccounts       WhatsAppAccount[]           @relation("AccountCreator")
+  contactImports        ContactImport[]
+  addressBookContacts   AddressBookContact[]        @relation("AddressBookCreator")
   createdAt             DateTime                    @default(now())
   updatedAt             DateTime                    @updatedAt
 }
@@ -69,22 +97,26 @@ model Session {
 }
 
 model WhatsAppAccount {
-  id               String                      @id @default(cuid())
-  name             String
-  slug             String                      @unique
-  isActive         Boolean                     @default(true)
-  createdById      String?
-  createdBy        User?                       @relation("AccountCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  connection       WhatsAppConnection?
-  contacts         Contact[]
-  conversations    Conversation[]
-  messages         Message[]
-  outboundRequests OutboundMessageRequest[]
-  tags             ConversationTag[]
-  memberships      WhatsAppAccountMembership[]
-  auditLogs        AuditLog[]
-  createdAt        DateTime                    @default(now())
-  updatedAt        DateTime                    @updatedAt
+  id                  String                      @id @default(cuid())
+  name                String
+  slug                String                      @unique
+  isActive            Boolean                     @default(true)
+  defaultPhoneCountry String                      @default("ES")
+  createdById         String?
+  createdBy           User?                       @relation("AccountCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  connection          WhatsAppConnection?
+  contacts            Contact[]
+  conversations       Conversation[]
+  messages            Message[]
+  outboundRequests    OutboundMessageRequest[]
+  tags                ConversationTag[]
+  memberships         WhatsAppAccountMembership[]
+  auditLogs           AuditLog[]
+  addressBookContacts AddressBookContact[]
+  addressBookPhones   AddressBookPhone[]
+  contactImports      ContactImport[]
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
 
   @@index([isActive])
 }
@@ -115,20 +147,110 @@ model WhatsAppConnection {
 }
 
 model Contact {
-  id            String          @id @default(cuid())
-  accountId     String
-  jid           String
-  phone         String?
-  displayName   String?
-  pushName      String?
-  syncedAt      DateTime        @default(now())
-  account       WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  conversations Conversation[]
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id                   String              @id @default(cuid())
+  accountId            String
+  jid                  String
+  phone                String?
+  displayName          String?
+  pushName             String?
+  addressBookContactId String?
+  syncedAt             DateTime            @default(now())
+  account              WhatsAppAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  addressBookContact   AddressBookContact? @relation(fields: [addressBookContactId], references: [id], onDelete: SetNull)
+  conversations        Conversation[]
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   @@unique([accountId, jid])
   @@index([accountId, syncedAt])
+  @@index([addressBookContactId])
+}
+
+model AddressBookContact {
+  id               String                   @id @default(cuid())
+  accountId        String
+  displayName      String
+  lastName         String?
+  email            String?
+  company          String?
+  tags             String?
+  origin           AddressBookContactOrigin
+  status           AddressBookContactStatus @default(VERIFIED)
+  createdById      String?
+  importId         String?
+  firstSeenAt      DateTime                 @default(now())
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  account          WhatsAppAccount          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdBy        User?                    @relation("AddressBookCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  import           ContactImport?           @relation("ImportedAddressBookContacts", fields: [importId], references: [id], onDelete: SetNull)
+  phones           AddressBookPhone[]
+  whatsappContacts Contact[]
+
+  @@index([accountId, displayName])
+  @@index([accountId, origin])
+  @@index([accountId, status])
+}
+
+model AddressBookPhone {
+  id                   String             @id @default(cuid())
+  accountId            String
+  addressBookContactId String
+  normalizedPhone      String
+  label                String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  account              WhatsAppAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  addressBookContact   AddressBookContact @relation(fields: [addressBookContactId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, normalizedPhone])
+  @@index([accountId, normalizedPhone])
+}
+
+model ContactImport {
+  id               String               @id @default(cuid())
+  accountId        String
+  createdById      String
+  status           ContactImportStatus  @default(DRAFT)
+  safeFileName     String
+  fileHash         String
+  totalRows        Int                  @default(0)
+  validRows        Int                  @default(0)
+  createdRows      Int                  @default(0)
+  updatedRows      Int                  @default(0)
+  skippedRows      Int                  @default(0)
+  errorRows        Int                  @default(0)
+  previewedAt      DateTime?
+  appliedAt        DateTime?
+  safeError        String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  account          WhatsAppAccount      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdBy        User                 @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  items            ContactImportItem[]
+  importedContacts AddressBookContact[] @relation("ImportedAddressBookContacts")
+
+  @@index([accountId, createdAt])
+  @@index([createdById])
+}
+
+model ContactImportItem {
+  id               String                  @id @default(cuid())
+  importId         String
+  rowNumber        Int
+  proposedName     String?
+  proposedLastName String?
+  proposedEmail    String?
+  proposedCompany  String?
+  proposedTags     String?
+  normalizedPhone  String?
+  action           ContactImportItemAction
+  safeError        String?
+  createdAt        DateTime                @default(now())
+  import           ContactImport           @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([importId, rowNumber])
+  @@index([importId, action])
 }
 
 model Conversation {

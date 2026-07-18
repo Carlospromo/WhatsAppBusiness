@@ -14,8 +14,16 @@ const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
 let stopping = false;
 const sockets = new Map<string, Awaited<ReturnType<typeof makeWASocket>>>();
 const connecting = new Set<string>();
+const accountQueues = new Map<string, Promise<void>>();
 
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
+
+function enqueueAccountWork(accountId: string, work: () => Promise<void>) {
+  const previous = accountQueues.get(accountId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(work).catch(() => undefined);
+  accountQueues.set(accountId, next);
+  return next;
+}
 
 async function connect(accountId: string) {
   if (stopping || connecting.has(accountId) || sockets.has(accountId)) return;
@@ -28,9 +36,9 @@ async function connect(accountId: string) {
     const socket = makeWASocket({ version, auth: state, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false });
     sockets.set(accountId, socket);
     socket.ev.on("creds.update", saveCreds);
-    socket.ev.on("contacts.upsert", (contacts) => void (async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); })());
-    socket.ev.on("contacts.update", (contacts) => void (async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); })());
-    socket.ev.on("messages.upsert", ({ messages, type }) => { if (type === "notify") void (async () => { for (const raw of messages) { const message = normalizeWhatsAppMessage(raw); if (message) await persistMessage(accountId, message); } })(); });
+    socket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
+    socket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
+    socket.ev.on("messages.upsert", ({ messages, type }) => { if (type === "notify") void enqueueAccountWork(accountId, async () => { for (const raw of messages) { const message = normalizeWhatsAppMessage(raw); if (message) await persistMessage(accountId, message); } }); });
     socket.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
       if (qr) { await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
       if (connection === "open") { const jid = socket.user?.id ?? null; await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null }); await auditConnection(accountId, "WHATSAPP_CONNECTED"); }

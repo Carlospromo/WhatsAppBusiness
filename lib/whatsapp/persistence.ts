@@ -1,14 +1,11 @@
 import { prisma } from "@/lib/prisma";
+import { AddressBookContactOrigin } from "@prisma/client";
+import { reconcileWhatsAppContact } from "@/lib/address-book";
 import type { NormalizedMessage } from "./normalize";
 
 export async function upsertContact(accountId: string, contact: { jid: string; displayName?: string | null; pushName?: string | null }) {
   if (!contact.jid.endsWith("@s.whatsapp.net")) return;
-  const phone = contact.jid.split("@")[0].replace(/\D/g, "") || null;
-  await prisma.contact.upsert({
-    where: { accountId_jid: { accountId, jid: contact.jid } },
-    create: { accountId, jid: contact.jid, phone, displayName: contact.displayName ?? null, pushName: contact.pushName ?? null },
-    update: { phone, displayName: contact.displayName ?? undefined, pushName: contact.pushName ?? undefined, syncedAt: new Date() },
-  });
+  await reconcileWhatsAppContact(accountId, { ...contact, origin: AddressBookContactOrigin.WHATSAPP_SYNC });
 }
 
 export async function persistMessage(accountId: string, message: NormalizedMessage) {
@@ -16,7 +13,7 @@ export async function persistMessage(accountId: string, message: NormalizedMessa
   if (exists) return false;
 
   const contact = message.conversationType === "DIRECT"
-    ? await prisma.contact.findUnique({ where: { accountId_jid: { accountId, jid: message.conversationJid } }, select: { id: true } })
+    ? await reconcileWhatsAppContact(accountId, { jid: message.conversationJid, origin: message.direction === "INBOUND" ? AddressBookContactOrigin.EXTERNAL : AddressBookContactOrigin.WHATSAPP_SYNC })
     : null;
   const conversation = await prisma.conversation.upsert({
     where: { accountId_jid: { accountId, jid: message.conversationJid } },
