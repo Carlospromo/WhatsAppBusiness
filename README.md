@@ -61,7 +61,7 @@ npm run build
 
 | Variable | Descripción |
 | --- | --- |
-| `DATABASE_URL` | Desarrollo: `file:./dev.db`. Railway: `file:/data/app.db`. |
+| `DATABASE_URL` | URL de PostgreSQL. En Railway: `${{Postgres.DATABASE_URL}}`. |
 | `AUTH_SECRET` | Secreto aleatorio de, al menos, 32 caracteres para proteger los hashes de sesión. |
 | `INITIAL_ADMIN_EMAIL` | Correo del primer administrador. |
 | `INITIAL_ADMIN_PASSWORD` | Contraseña inicial; nunca se registra ni se guarda en texto plano. |
@@ -75,8 +75,8 @@ npm run build
 
 1. Crea un proyecto Railway desde este repositorio privado y selecciona la rama `main` cuando la fase se integre.
 2. Railway detectará el `Dockerfile` y construirá la aplicación.
-3. Añade un volumen de **1 GB** y móntalo en `/data`. Usa una sola réplica: la sesión vinculada y la cola de envíos no admiten varios workers simultáneos.
-4. Configura `DATABASE_URL=file:/data/app.db`, `WA_AUTH_DIR=/data/wa-auth` y el resto de variables de entorno requeridas.
+3. Añade un volumen y móntalo en `/data`. Usa una sola réplica: la sesión vinculada y la cola de envíos no admiten varios workers simultáneos.
+4. Añade un servicio PostgreSQL y configura `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `WA_AUTH_DIR=/data/wa-auth` y el resto de variables de entorno requeridas.
 5. Configura `/api/health` como *healthcheck*; `railway.toml` ya lo declara.
 6. En cada arranque, el contenedor valida las variables, aplica migraciones y crea el administrador inicial de forma idempotente antes de iniciar Next.js.
 
@@ -121,3 +121,37 @@ El menú principal muestra las rutas disponibles para cada rol. Solo un `ADMIN` 
 Desde `/dashboard/administracion/cuentas` se crea una cuenta indicando un nombre y un identificador corto. La acción **Desactivar** es recuperable: detiene la conexión operativa de esa cuenta, la oculta del trabajo diario y elimina únicamente el QR temporal. Conserva los datos, mensajes, agenda y sesión de WhatsApp en `/data/wa-auth/<accountId>`. Al reactivarla, el worker vuelve a iniciarla; no existe borrado físico de cuentas ni de sus sesiones desde la interfaz.
 
 Para vincular un número, abre **Vinculación**, selecciona la cuenta y pulsa **Solicitar vinculación**. Cuando aparezca el QR, en el teléfono abre WhatsApp, ve a **Dispositivos vinculados** y escanéalo. El QR solo se sirve a administradores autenticados, no se incorpora a URLs públicas ni se escribe en los registros de la aplicación.
+
+## Fase 8: medios entrantes privados
+
+La aplicación guarda únicamente los medios **nuevos** recibidos tras desplegar esta fase: imágenes, audios o notas de voz y vídeos. Los medios se descargan desde el worker de WhatsApp y se muestran en el hilo correspondiente. Una imagen puede verse en línea; audios y vídeos usan los controles nativos del navegador. Nunca se reproducen automáticamente.
+
+No se guardan documentos, stickers, GIFs, ubicaciones, estados, llamadas, medios enviados desde la web, mensajes de “ver una vez” ni mensajes efímeros. Todavía no se permite enviar adjuntos desde la interfaz.
+
+Los archivos no se almacenan en PostgreSQL ni en el volumen Railway. PostgreSQL contiene solo metadatos y estados; el archivo se guarda en un bucket privado Cloudflare R2. El volumen `/data` continúa reservado solo para `WA_AUTH_DIR=/data/wa-auth`.
+
+### Configurar Cloudflare R2
+
+1. Crea un bucket privado Standard, por ejemplo `whatsimages`.
+2. No habilites `r2.dev`, un dominio público ni listado público de objetos.
+3. Crea una credencial R2 **Object Read & Write** limitada exclusivamente a ese bucket.
+4. Si la interfaz usa URLs firmadas directamente, configura CORS con el origen exacto de la aplicación, los métodos `GET` y `HEAD`, y sin comodines.
+5. Guarda las credenciales exclusivamente como variables de Railway.
+
+| Variable | Uso |
+| --- | --- |
+| `MEDIA_STORAGE` | Debe ser `r2`. |
+| `R2_BUCKET` | Nombre del bucket privado, por ejemplo `whatsimages`. |
+| `R2_ACCOUNT_ID` | Identificador de la cuenta Cloudflare. |
+| `R2_ENDPOINT` | `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com`. |
+| `R2_REGION` | `auto`. |
+| `R2_ACCESS_KEY_ID` | Credencial R2 limitada al bucket. |
+| `R2_SECRET_ACCESS_KEY` | Secreto R2; nunca se versiona ni registra. |
+| `MEDIA_ENCRYPTION_KEY` | 32 bytes en Base64 para cifrar temporalmente los descriptores de recuperación. Generar con `openssl rand -base64 32`. |
+| `MEDIA_MAX_IMAGE_BYTES` | Límite de imágenes, por defecto 20 MB. |
+| `MEDIA_MAX_AUDIO_BYTES` | Límite de audio, por defecto 50 MB. |
+| `MEDIA_MAX_VIDEO_BYTES` | Límite de vídeo, por defecto 250 MB. |
+
+El worker procesa los adjuntos de forma secuencial por cuenta, conserva un descriptor cifrado solo mientras una descarga está pendiente y lo elimina al completar la subida. Los enlaces de lectura son temporales, se emiten únicamente tras comprobar sesión y permiso sobre la cuenta, y no se guardan en la base de datos. Una descarga que no pueda recuperarse tras los reintentos se muestra como archivo no disponible.
+
+Mantén una sola réplica Railway. Para un mantenimiento futuro, elimina primero el objeto privado de R2 y después su metadato en PostgreSQL.

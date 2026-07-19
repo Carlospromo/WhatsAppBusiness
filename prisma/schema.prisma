@@ -38,6 +38,22 @@ enum OutboundMessageStatus {
   FAILED
 }
 
+enum MediaAttachmentKind {
+  IMAGE
+  AUDIO
+  VIDEO
+}
+
+enum MediaAttachmentStatus {
+  PENDING
+  DOWNLOADING
+  STORED
+  RETRYING
+  FAILED
+  REJECTED_LIMIT
+  UNAVAILABLE
+}
+
 enum AddressBookContactOrigin {
   IMPORTED
   WHATSAPP_SYNC
@@ -108,6 +124,7 @@ model WhatsAppAccount {
   contacts            Contact[]
   conversations       Conversation[]
   messages            Message[]
+  mediaAttachments    MediaAttachment[]
   outboundRequests    OutboundMessageRequest[]
   tags                ConversationTag[]
   memberships         WhatsAppAccountMembership[]
@@ -284,23 +301,55 @@ model Conversation {
 }
 
 model Message {
-  id             String           @id @default(cuid())
-  accountId      String
-  externalId     String
-  conversationId String
-  direction      MessageDirection
-  senderJid      String
-  body           String?
-  messageType    String
-  sentAt         DateTime
-  importedAt     DateTime         @default(now())
-  isRead         Boolean          @default(false)
-  account        WhatsAppAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  id               String            @id @default(cuid())
+  accountId        String
+  externalId       String
+  conversationId   String
+  direction        MessageDirection
+  senderJid        String
+  body             String?
+  messageType      String
+  sentAt           DateTime
+  importedAt       DateTime          @default(now())
+  isRead           Boolean           @default(false)
+  account          WhatsAppAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation     Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  mediaAttachments MediaAttachment[]
 
   @@unique([accountId, externalId])
   @@index([conversationId, sentAt])
   @@index([accountId, importedAt])
+}
+
+model MediaAttachment {
+  id                       String                @id @default(cuid())
+  accountId                String
+  messageId                String
+  position                 Int                   @default(0)
+  kind                     MediaAttachmentKind
+  status                   MediaAttachmentStatus @default(PENDING)
+  mimeType                 String
+  sizeBytes                Int?
+  width                    Int?
+  height                   Int?
+  durationSeconds          Int?
+  objectKey                String                @unique
+  sha256                   String?
+  storedAt                 DateTime?
+  attemptCount             Int                   @default(0)
+  lastAttemptAt            DateTime?
+  safeError                String?
+  sourceEnvelopeCiphertext String?
+  sourceEnvelopeIv         String?
+  sourceEnvelopeVersion    Int?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  account                  WhatsAppAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  message                  Message               @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, position])
+  @@index([accountId, status])
+  @@index([messageId])
 }
 
 model OutboundMessageRequest {

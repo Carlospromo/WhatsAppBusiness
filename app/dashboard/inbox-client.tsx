@@ -20,7 +20,8 @@ type Conversation = {
   contact: Contact;
   account: Pick<Account, "id" | "name" | "slug">;
 };
-type Message = { id: string; direction: "INBOUND" | "OUTBOUND"; body: string | null; sentAt: string; messageType: string };
+type MediaAttachment = { id: string; kind: "IMAGE" | "AUDIO" | "VIDEO"; status: "PENDING" | "DOWNLOADING" | "STORED" | "RETRYING" | "FAILED" | "REJECTED_LIMIT" | "UNAVAILABLE"; mimeType: string; sizeBytes: number | null; width: number | null; height: number | null; durationSeconds: number | null };
+type Message = { id: string; direction: "INBOUND" | "OUTBOUND"; body: string | null; sentAt: string; messageType: string; mediaAttachments?: MediaAttachment[] };
 type ConversationResponse = { conversation: Conversation; messages: Message[]; nextCursor: string | null };
 
 function conversationName(conversation: Pick<Conversation, "contact" | "type">) {
@@ -69,6 +70,18 @@ function mergeById<T extends { id: string }>(older: T[], newer: T[]) {
     seen.add(item.id);
     return true;
   });
+}
+
+function MediaContent({ attachment, outbound }: { attachment: MediaAttachment; outbound: boolean }) {
+  const source = `/api/media/${attachment.id}`;
+  const stateClass = outbound ? "text-emerald-50" : "text-slate-500";
+  if (attachment.status === "REJECTED_LIMIT") return <p className={`text-sm ${stateClass}`}>Archivo no almacenado por superar el límite permitido.</p>;
+  if (attachment.status === "UNAVAILABLE" || attachment.status === "FAILED") return <p className={`text-sm ${stateClass}`}>Archivo no disponible.</p>;
+  if (attachment.status !== "STORED") return <p className={`text-sm ${stateClass}`}>Preparando archivo…</p>;
+  const download = <a href={source} target="_blank" rel="noreferrer" className={`mt-2 inline-block text-xs font-medium underline ${outbound ? "text-emerald-50" : "text-emerald-700"}`}>Abrir o descargar</a>;
+  if (attachment.kind === "IMAGE") return <div><a href={source} target="_blank" rel="noreferrer"><Image src={source} alt="Imagen recibida" width={960} height={720} unoptimized className="max-h-80 w-auto max-w-full rounded-xl object-contain" /></a>{download}</div>;
+  if (attachment.kind === "AUDIO") return <div><audio controls preload="metadata" className="max-w-full" src={source}>Tu navegador no puede reproducir este audio.</audio>{download}</div>;
+  return <div><video controls preload="metadata" className="max-h-80 max-w-full rounded-xl bg-slate-900" src={source}>Tu navegador no puede reproducir este vídeo.</video>{download}</div>;
 }
 
 export function InboxClient({ accounts, initialRows, initialNextCursor, initialSelectedId, accountId, filter, search, role, connectionStatuses }: {
@@ -276,7 +289,8 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
                     {showDay && <p className="my-3 text-center text-[11px] font-medium text-slate-400"><span className="rounded-full bg-white px-3 py-1.5 shadow-sm">{day}</span></p>}
                     <div className={`flex ${outbound ? "justify-end" : "justify-start"}`}>
                       <article className={`max-w-[88%] rounded-2xl px-3 py-2.5 text-sm shadow-sm sm:max-w-[74%] ${outbound ? "rounded-br-md bg-emerald-600 text-white" : "rounded-bl-md bg-white text-slate-800"}`}>
-                        <p className="whitespace-pre-wrap break-words leading-relaxed">{message.body || "Mensaje sin texto"}</p>
+                        {message.mediaAttachments?.map((attachment) => <MediaContent key={attachment.id} attachment={attachment} outbound={outbound} />)}
+                        {message.body ? <p className={`${message.mediaAttachments?.length ? "mt-2" : ""} whitespace-pre-wrap break-words leading-relaxed`}>{message.body}</p> : !message.mediaAttachments?.length && <p className="whitespace-pre-wrap break-words leading-relaxed">Mensaje sin texto</p>}
                         <time className={`mt-1 block text-right text-[10px] ${outbound ? "text-emerald-100" : "text-slate-400"}`}>{formatTime(message.sentAt)}</time>
                       </article>
                     </div>

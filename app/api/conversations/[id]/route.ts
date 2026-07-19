@@ -26,7 +26,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!conversation) return NextResponse.json({ error: "No encontrada" }, { status: 404 });
   if (!await canAccessAccount(user,conversation.accountId)) return NextResponse.json({error:"Prohibido"},{status:403});
   const cursor = parseCursor(request.nextUrl.searchParams.get("cursor"));
-  const results = await prisma.message.findMany({ where: { conversationId: id, accountId: conversation.accountId }, orderBy: [{ sentAt: "desc" }, { id: "desc" }], take: 51, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+  const results = await prisma.message.findMany({ where: { conversationId: id, accountId: conversation.accountId }, orderBy: [{ sentAt: "desc" }, { id: "desc" }], take: 51, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: { mediaAttachments: { select: { id: true, kind: true, status: true, mimeType: true, sizeBytes: true, width: true, height: true, durationSeconds: true } } } });
   const page = messagesFromNewestPage(results);
 
   // Earlier versions updated the conversation preview before message persistence

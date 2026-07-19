@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { AddressBookContactOrigin } from "@prisma/client";
+import { AddressBookContactOrigin, MediaAttachmentStatus } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { reconcileWhatsAppContact } from "@/lib/address-book";
-import type { NormalizedMessage } from "./normalize";
+import { encryptMediaSource } from "@/lib/media-encryption";
+import { previewForMessage, type NormalizedMessage } from "./normalize";
 import { messageRecordData } from "./message-record";
 
 export async function upsertContact(accountId: string, contact: { jid: string; displayName?: string | null; pushName?: string | null }) {
@@ -15,10 +17,10 @@ export async function persistMessage(accountId: string, message: NormalizedMessa
     : null;
   // Identity metadata may arrive again with a replayed event. Reconcile it
   // before deduplicating the message so an existing LID contact gains its phone.
-  const exists = await prisma.message.findUnique({ where: { accountId_externalId: { accountId, externalId: message.externalId } }, select: { id: true } });
-  if (exists) return false;
+  const exists = await prisma.message.findUnique({ where: { accountId_externalId: { accountId, externalId: message.externalId } }, include: { mediaAttachments: { select: { id: true, status: true } } } });
+  if (exists) return { created: false, mediaAttachment: exists.mediaAttachments[0] ?? null };
   try {
-    await prisma.$transaction(async (transaction) => {
+    return await prisma.$transaction(async (transaction) => {
       const conversation = await transaction.conversation.upsert({
         where: { accountId_jid: { accountId, jid: message.conversationJid } },
         create: {
@@ -26,21 +28,40 @@ export async function persistMessage(accountId: string, message: NormalizedMessa
           type: message.conversationType,
           contactId: contact?.id,
           lastMessageAt: message.sentAt,
-          lastMessagePreview: message.body.slice(0, 240),
+          lastMessagePreview: previewForMessage(message),
           unreadCount: message.direction === "INBOUND" ? 1 : 0,
         },
         update: {
           contactId: contact?.id,
           lastMessageAt: message.sentAt,
-          lastMessagePreview: message.body.slice(0, 240),
+          lastMessagePreview: previewForMessage(message),
           unreadCount: message.direction === "INBOUND" ? { increment: 1 } : undefined,
         },
       });
-      await transaction.message.create({ data: messageRecordData(accountId, conversation.id, message) });
+      const savedMessage = await transaction.message.create({ data: messageRecordData(accountId, conversation.id, message) });
+      const mediaAttachment = message.media
+        ? await transaction.mediaAttachment.create({
+          data: {
+            accountId,
+            messageId: savedMessage.id,
+            kind: message.media.kind,
+            mimeType: message.media.mimeType,
+            sizeBytes: message.media.declaredSize,
+            width: message.media.width,
+            height: message.media.height,
+            durationSeconds: message.media.durationSeconds,
+            objectKey: `accounts/${accountId}/messages/${savedMessage.id}/${randomUUID()}`,
+            ...(message.media.source
+              ? encryptMediaSource(message.media.source)
+              : { status: MediaAttachmentStatus.UNAVAILABLE, safeError: "Archivo no disponible." }),
+          },
+          select: { id: true, status: true },
+        })
+        : null;
+      return { created: true, mediaAttachment };
     });
-    return true;
   } catch (error) {
-    if ((error as { code?: string }).code === "P2002") return false;
+    if ((error as { code?: string }).code === "P2002") return { created: false, mediaAttachment: null };
     throw error;
   }
 }
