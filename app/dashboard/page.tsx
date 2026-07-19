@@ -18,10 +18,6 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const search = params.q?.trim().slice(0, 100) || undefined;
   const { rows, nextCursor } = await listConversations({ accountIds: activeAccounts.map((account) => account.id), accountId, filter, search });
   const selected = params.selected || null;
-  const selectedConversation = selected ? rows.find((conversation) => conversation.id === selected) : null;
-  const linkCandidates = selectedConversation?.contact && !selectedConversation.contact.addressBookContact && user.role !== "VIEWER"
-    ? await prisma.addressBookContact.findMany({ where: { accountId: selectedConversation.accountId }, select: { id: true, displayName: true }, orderBy: { displayName: "asc" }, take: 50 })
-    : [];
   const connections = await prisma.whatsAppConnection.findMany({ where: { accountId: { in: activeAccounts.map((account) => account.id) } }, select: { accountId: true, status: true } });
   const connectionStatuses = Object.fromEntries(connections.map((connection) => [connection.accountId, connection.status]));
   const clientRows = rows.map((conversation) => ({
@@ -42,5 +38,5 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     account: conversation.account,
   }));
 
-  return <InboxClient key={`${accountId || "all"}:${filter}:${search || ""}:${selected || ""}`} accounts={activeAccounts} initialRows={clientRows} initialNextCursor={nextCursor} initialSelectedId={selected} accountId={accountId} filter={filter} search={search} role={user.role} connectionStatuses={connectionStatuses} linkCandidates={linkCandidates} linkCandidateContactId={selectedConversation?.contact?.id}/>;
+  return <InboxClient key={`${accountId || "all"}:${filter}:${search || ""}:${selected || ""}`} accounts={activeAccounts} initialRows={clientRows} initialNextCursor={nextCursor} initialSelectedId={selected} accountId={accountId} filter={filter} search={search} role={user.role} connectionStatuses={connectionStatuses}/>;
 }
