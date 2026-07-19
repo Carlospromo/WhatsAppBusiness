@@ -147,22 +147,25 @@ model WhatsAppConnection {
 }
 
 model Contact {
-  id                   String              @id @default(cuid())
-  accountId            String
-  jid                  String
-  phone                String?
-  displayName          String?
-  pushName             String?
-  addressBookContactId String?
-  syncedAt             DateTime            @default(now())
-  account              WhatsAppAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  addressBookContact   AddressBookContact? @relation(fields: [addressBookContactId], references: [id], onDelete: SetNull)
-  conversations        Conversation[]
-  createdAt            DateTime            @default(now())
-  updatedAt            DateTime            @updatedAt
+  id                      String              @id @default(cuid())
+  accountId               String
+  jid                     String
+  phone                   String?
+  displayName             String?
+  pushName                String?
+  profilePictureUrl       String?
+  profilePictureUpdatedAt DateTime?
+  addressBookContactId    String?
+  syncedAt                DateTime            @default(now())
+  account                 WhatsAppAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  addressBookContact      AddressBookContact? @relation(fields: [addressBookContactId], references: [id], onDelete: SetNull)
+  conversations           Conversation[]
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
 
   @@unique([accountId, jid])
   @@index([accountId, syncedAt])
+  @@index([accountId, profilePictureUpdatedAt])
   @@index([addressBookContactId])
 }
 

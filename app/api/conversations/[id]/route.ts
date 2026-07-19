@@ -7,7 +7,20 @@ import { messagesFromNewestPage, parseCursor } from "@/lib/inbox";
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user=await getCurrentUser(); if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const { id } = await params;
-  const conversation = await prisma.conversation.findUnique({ where: { id }, include: { contact: { include: { addressBookContact: true } }, account: { select: { id: true, name: true, slug: true } } } });
+  const conversation = await prisma.conversation.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      accountId: true,
+      type: true,
+      lastMessageAt: true,
+      lastMessagePreview: true,
+      unreadCount: true,
+      updatedAt: true,
+      contact: { select: { id: true, displayName: true, pushName: true, phone: true, profilePictureUpdatedAt: true, addressBookContact: { select: { displayName: true, origin: true } } } },
+      account: { select: { id: true, name: true, slug: true } },
+    },
+  });
   if (!conversation) return NextResponse.json({ error: "No encontrada" }, { status: 404 });
   if (!await canAccessAccount(user,conversation.accountId)) return NextResponse.json({error:"Prohibido"},{status:403});
   const cursor = parseCursor(request.nextUrl.searchParams.get("cursor"));
