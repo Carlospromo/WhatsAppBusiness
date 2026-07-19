@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
-import { previewImport, normalizePhone, phoneFromJid, validCountry } from "../lib/address-book";
+import { previewImport, normalizePhone, phoneFromJid, validCountry, validateManualAddressBookContact } from "../lib/address-book";
 import { canLinkAddressBookContact, canManageAddressBook } from "../lib/authorization";
 
 describe("hybrid address book", () => {
@@ -34,5 +34,11 @@ describe("hybrid address book", () => {
     expect(canManageAddressBook("AGENT")).toBe(false);
     expect(canLinkAddressBookContact("AGENT")).toBe(true);
     expect(canLinkAddressBookContact("VIEWER")).toBe(false);
+  });
+
+  it("validates a manual contact with the account country", () => {
+    expect(validateManualAddressBookContact({ nombre: "Ana", telefono: "600 000 000", email: "ana@example.com", empresa: "Acme" }, "ES")).toMatchObject({ displayName: "Ana", normalizedPhone: "+34600000000" });
+    expect(validateManualAddressBookContact({ nombre: "<script>", telefono: "600000000" }, "ES")).toBeNull();
+    expect(validateManualAddressBookContact({ nombre: "Ana", telefono: "600000000", email: "incorrecto" }, "ES")).toBeNull();
   });
 });

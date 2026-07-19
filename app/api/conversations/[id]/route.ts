@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canAccessAccount } from "@/lib/account";
 import { messagesFromNewestPage, parseCursor } from "@/lib/inbox";
+import { visibleConversation } from "@/lib/conversation-identity";
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user=await getCurrentUser(); if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     select: {
       id: true,
       accountId: true,
+      jid: true,
       type: true,
       lastMessageAt: true,
       lastMessagePreview: true,
@@ -41,5 +43,5 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       sentAt: conversation.lastMessageAt ?? conversation.updatedAt,
     }]
     : page.messages;
-  return NextResponse.json({ conversation, messages, nextCursor: page.nextCursor });
+  return NextResponse.json({ conversation: visibleConversation(conversation), messages, nextCursor: page.nextCursor });
 }

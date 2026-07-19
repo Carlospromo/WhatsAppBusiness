@@ -1,5 +1,6 @@
 import { ConversationType, MessageDirection, OutboundMessageStatus } from "@prisma/client";
 import { prisma } from "./prisma";
+import { visibleConversation } from "./conversation-identity";
 
 const pageSize = 30;
 const textLimit = 2000;
@@ -36,6 +37,7 @@ export async function listConversations(query: { accountIds: string[]; accountId
     select: {
       id: true,
       accountId: true,
+      jid: true,
       type: true,
       lastMessageAt: true,
       lastMessagePreview: true,
@@ -48,7 +50,7 @@ export async function listConversations(query: { accountIds: string[]; accountId
     ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
   });
   const next = rows.length > pageSize ? rows.pop()!.id : null;
-  return { rows, nextCursor: next };
+  return { rows: rows.map(visibleConversation), nextCursor: next };
 }
 
 export async function queueOutboundMessage(conversationId: string, accountId: string, userId: string, body: string) {

@@ -9,7 +9,7 @@ import { MessageComposer } from "./message-composer";
 type Role = "ADMIN" | "AGENT" | "VIEWER";
 type Account = { id: string; name: string; slug: string; isActive: boolean };
 type AddressBookContact = { displayName: string; origin: string } | null;
-type Contact = { id: string; displayName: string | null; pushName: string | null; phone: string | null; profilePictureUpdatedAt: string | null; addressBookContact: AddressBookContact } | null;
+type Contact = { id: string | null; displayName: string | null; pushName: string | null; phone: string | null; profilePictureUpdatedAt: string | null; addressBookContact: AddressBookContact } | null;
 type Conversation = {
   id: string;
   accountId: string;
