@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -8,11 +9,10 @@ import { MessageComposer } from "./message-composer";
 type Role = "ADMIN" | "AGENT" | "VIEWER";
 type Account = { id: string; name: string; slug: string; isActive: boolean };
 type AddressBookContact = { displayName: string; origin: string } | null;
-type Contact = { id: string; displayName: string | null; pushName: string | null; phone: string | null; addressBookContact: AddressBookContact } | null;
+type Contact = { id: string; displayName: string | null; pushName: string | null; phone: string | null; profilePictureUpdatedAt: string | null; addressBookContact: AddressBookContact } | null;
 type Conversation = {
   id: string;
   accountId: string;
-  jid: string;
   type: "DIRECT" | "GROUP";
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
@@ -26,8 +26,9 @@ type ConversationResponse = { conversation: Conversation; messages: Message[]; n
 function conversationName(conversation: Pick<Conversation, "contact" | "type">) {
   const contact = conversation.contact;
   const addressBookName = contact?.addressBookContact?.displayName;
-  const hasGenericExternalName = contact?.addressBookContact?.origin === "EXTERNAL" && addressBookName === "Contacto externo";
-  return (hasGenericExternalName ? null : addressBookName)
+  const hasGenericAddressBookName = (contact?.addressBookContact?.origin === "EXTERNAL" && addressBookName === "Contacto externo")
+    || (contact?.addressBookContact?.origin === "WHATSAPP_SYNC" && addressBookName === "Contacto de WhatsApp");
+  return (hasGenericAddressBookName ? null : addressBookName)
     || contact?.displayName
     || contact?.pushName
     || contact?.phone
@@ -36,6 +37,21 @@ function conversationName(conversation: Pick<Conversation, "contact" | "type">) 
 
 function initials(value: string) {
   return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "W";
+}
+
+function ConversationAvatar({ contact, name, size = "regular" }: { contact: Contact; name: string; size?: "small" | "regular" }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const dimension = size === "small" ? 40 : 48;
+  const pictureVersion = contact?.profilePictureUpdatedAt;
+
+  useEffect(() => setImageFailed(false), [contact?.id, pictureVersion]);
+
+  if (contact?.id && !imageFailed) {
+    const src = `/api/contacts/${contact.id}/avatar${pictureVersion ? `?v=${encodeURIComponent(pictureVersion)}` : ""}`;
+    return <Image src={src} alt="" width={dimension} height={dimension} unoptimized onError={() => setImageFailed(true)} className={`${size === "small" ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-full object-cover bg-slate-100`} />;
+  }
+
+  return <span className={`flex ${size === "small" ? "h-10 w-10" : "h-12 w-12"} shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-800`}>{initials(name)}</span>;
 }
 
 function formatTime(value: string) {
@@ -140,6 +156,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
 
   const selectedConversation = detail?.conversation || rows.find((conversation) => conversation.id === selectedId) || null;
   const selectedName = selectedConversation ? conversationName(selectedConversation) : "";
+  const selectedPhone = selectedConversation?.contact?.phone ?? null;
   const sendingEnabled = Boolean(selectedConversation && canManage && connectionStatuses[selectedConversation.accountId] === "CONNECTED");
   const hasExternalContact = selectedConversation?.contact?.addressBookContact?.origin === "EXTERNAL";
   const filters = useMemo(() => [["all", "Todas"], ["unread", "No leídas"], ["direct", "Directas"], ["group", "Grupos"]], []);
@@ -225,7 +242,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
               const isSelected = conversation.id === selectedId;
               const external = conversation.contact?.addressBookContact?.origin === "EXTERNAL";
               return <button key={conversation.id} type="button" onClick={() => selectConversation(conversation.id)} className={`flex w-full gap-3 border-b border-slate-100 px-3 py-3 text-left transition ${isSelected ? "bg-emerald-50" : "hover:bg-slate-50"}`}>
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">{initials(name)}</span>
+                <ConversationAvatar contact={conversation.contact} name={name} size="small" />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center justify-between gap-2"><strong className="truncate text-sm text-slate-800">{name}</strong>{conversation.lastMessageAt && <time className="shrink-0 text-[11px] text-slate-400">{formatTime(conversation.lastMessageAt)}</time>}</span>
                   <span className="mt-0.5 flex items-center gap-2"><span className={`min-w-0 flex-1 truncate text-xs ${conversation.unreadCount > 0 ? "font-medium text-slate-700" : "text-slate-500"}`}>{conversation.lastMessagePreview || "Sin texto"}</span>{conversation.unreadCount > 0 && <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{conversation.unreadCount}</span>}</span>
@@ -241,8 +258,8 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
           {!selectedId ? <div className="m-auto max-w-sm px-8 text-center"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-xl">💬</div><h2 className="mt-4 text-lg font-semibold text-slate-800">Selecciona una conversación</h2><p className="mt-2 text-sm text-slate-500">Abre un chat para ver sus mensajes y responder desde aquí.</p></div> : <>
             {selectedConversation && <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:px-5">
               <button type="button" onClick={closeConversation} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 md:hidden" aria-label="Volver a conversaciones">←</button>
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-800">{initials(selectedName)}</span>
-              <div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-slate-900">{selectedName}</h2><p className="truncate text-xs text-slate-500">{selectedConversation.account.name}{hasExternalContact ? " · Contacto externo" : ""}</p></div>
+              <ConversationAvatar contact={selectedConversation.contact} name={selectedName} />
+              <div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-slate-900">{selectedName}</h2><p className="truncate text-xs text-slate-500">{selectedConversation.account.name}{selectedPhone && selectedPhone !== selectedName ? ` · ${selectedPhone}` : ""}{hasExternalContact ? " · Contacto externo" : ""}</p></div>
               {hasExternalContact && <span className="hidden rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800 sm:inline">Externo</span>}
             </header>}
             <div className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef5f2)] px-3 py-4 sm:px-6">

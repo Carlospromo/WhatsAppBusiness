@@ -23,7 +23,6 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const clientRows = rows.map((conversation) => ({
     id: conversation.id,
     accountId: conversation.accountId,
-    jid: conversation.jid,
     type: conversation.type,
     lastMessageAt: conversation.lastMessageAt?.toISOString() ?? null,
     lastMessagePreview: conversation.lastMessagePreview,
@@ -33,6 +32,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       displayName: conversation.contact.displayName,
       pushName: conversation.contact.pushName,
       phone: conversation.contact.phone,
+      profilePictureUpdatedAt: conversation.contact.profilePictureUpdatedAt?.toISOString() ?? null,
       addressBookContact: conversation.contact.addressBookContact ? { displayName: conversation.contact.addressBookContact.displayName, origin: conversation.contact.addressBookContact.origin } : null,
     } : null,
     account: conversation.account,

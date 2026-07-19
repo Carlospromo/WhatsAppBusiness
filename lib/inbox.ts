@@ -31,7 +31,22 @@ export async function listConversations(query: { accountIds: string[]; accountId
     ...(query.filter === "group" ? { type: ConversationType.GROUP } : {}),
     ...(search ? { OR: [{ contact: { displayName: { contains: search } } }, { contact: { pushName: { contains: search } } }, { contact: { phone: { contains: search } } }, { contact: { addressBookContact: { displayName: { contains: search } } } }] } : {}),
   };
-  const rows = await prisma.conversation.findMany({ where, include: { contact: { include: { addressBookContact: true } }, account: { select: { id: true, name: true, slug: true } } }, orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }], take: pageSize + 1, ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}) });
+  const rows = await prisma.conversation.findMany({
+    where,
+    select: {
+      id: true,
+      accountId: true,
+      type: true,
+      lastMessageAt: true,
+      lastMessagePreview: true,
+      unreadCount: true,
+      contact: { select: { id: true, displayName: true, pushName: true, phone: true, profilePictureUpdatedAt: true, addressBookContact: { select: { displayName: true, origin: true } } } },
+      account: { select: { id: true, name: true, slug: true } },
+    },
+    orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
+    take: pageSize + 1,
+    ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+  });
   const next = rows.length > pageSize ? rows.pop()!.id : null;
   return { rows, nextCursor: next };
 }
