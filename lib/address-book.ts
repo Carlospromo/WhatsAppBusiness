@@ -28,6 +28,11 @@ function text(value: unknown, limit = 160) {
   return result.slice(0, limit) || null;
 }
 
+function safeText(value: unknown, limit = 160) {
+  const result = text(value, limit);
+  return result && !/[<>]/.test(result) ? result : null;
+}
+
 function normalizeHeader(value: unknown) {
   return String(value ?? "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
@@ -48,6 +53,57 @@ export function phoneFromJid(jid: string | null | undefined) {
   if (!jid?.endsWith("@s.whatsapp.net")) return null;
   const digits = jid.split("@")[0].replace(/\D/g, "");
   return digits.length >= 7 && digits.length <= 15 ? `+${digits}` : null;
+}
+
+export type ManualAddressBookContactInput = {
+  displayName: string;
+  normalizedPhone: string;
+  lastName: string | null;
+  email: string | null;
+  company: string | null;
+  tags: string | null;
+};
+
+export function validateManualAddressBookContact(value: unknown, defaultCountry: string): ManualAddressBookContactInput | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const displayName = safeText(record.nombre, 120);
+  const normalizedPhone = normalizePhone(record.telefono, defaultCountry);
+  const lastName = safeText(record.apellidos, 120);
+  const email = safeText(record.email, 254);
+  const company = safeText(record.empresa, 160);
+  const tags = safeText(record.etiquetas, 300);
+  if (!displayName || !normalizedPhone) return null;
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  return { displayName, normalizedPhone, lastName, email, company, tags };
+}
+
+export async function createManualAddressBookContact(accountId: string, userId: string, input: ManualAddressBookContactInput) {
+  const existingPhone = await prisma.addressBookPhone.findUnique({
+    where: { accountId_normalizedPhone: { accountId, normalizedPhone: input.normalizedPhone } },
+    include: { addressBookContact: { select: { id: true, origin: true } } },
+  });
+  if (existingPhone?.addressBookContact.origin === AddressBookContactOrigin.IMPORTED || existingPhone?.addressBookContact.origin === AddressBookContactOrigin.MANUAL) {
+    return { status: "EXISTS" as const, id: existingPhone.addressBookContact.id };
+  }
+
+  const data = { displayName: input.displayName, lastName: input.lastName, email: input.email, company: input.company, tags: input.tags, origin: AddressBookContactOrigin.MANUAL, status: AddressBookContactStatus.VERIFIED, createdById: userId, importId: null };
+  const contact = existingPhone
+    ? await prisma.addressBookContact.update({ where: { id: existingPhone.addressBookContact.id }, data })
+    : await prisma.addressBookContact.create({ data: { accountId, ...data, phones: { create: { accountId, normalizedPhone: input.normalizedPhone } } } });
+
+  await prisma.contact.updateMany({ where: { accountId, phone: input.normalizedPhone }, data: { addressBookContactId: contact.id } });
+  const jid = `${input.normalizedPhone.slice(1)}@s.whatsapp.net`;
+  const existingConversation = await prisma.conversation.findFirst({ where: { accountId, jid }, select: { id: true } });
+  if (existingConversation) {
+    const technical = await prisma.contact.upsert({
+      where: { accountId_jid: { accountId, jid } },
+      create: { accountId, jid, phone: input.normalizedPhone, displayName: input.displayName, addressBookContactId: contact.id },
+      update: { phone: input.normalizedPhone, addressBookContactId: contact.id },
+    });
+    await prisma.conversation.updateMany({ where: { accountId, jid, contactId: null }, data: { contactId: technical.id } });
+  }
+  return { status: existingPhone ? "UPDATED" as const : "CREATED" as const, id: contact.id };
 }
 
 function valueFromCell(value: ExcelJS.CellValue) {
@@ -132,7 +188,8 @@ export async function reconcileExistingContacts(accountId: string) {
     const phone = phoneFromJid(contact.jid);
     if (!phone) continue;
     const known = await prisma.addressBookPhone.findUnique({ where: { accountId_normalizedPhone: { accountId, normalizedPhone: phone } } });
-    await reconcileWhatsAppContact(accountId, { ...contact, origin: AddressBookContactOrigin.WHATSAPP_SYNC });
+    const technical = await reconcileWhatsAppContact(accountId, { ...contact, origin: AddressBookContactOrigin.WHATSAPP_SYNC });
+    await prisma.conversation.updateMany({ where: { accountId, jid: contact.jid, contactId: null }, data: { contactId: technical.id } });
     if (known) linked += 1; else created += 1;
   }
   return { linked, created };
@@ -151,11 +208,11 @@ export async function applyContactImport(importId: string) {
     const existing = await prisma.addressBookPhone.findUnique({ where: { accountId_normalizedPhone: { accountId: imported.accountId, normalizedPhone: item.normalizedPhone } } });
     if (existing) {
       await prisma.addressBookContact.update({ where: { id: existing.addressBookContactId }, data });
-      await prisma.contact.updateMany({ where: { accountId: imported.accountId, phone: item.normalizedPhone.slice(1) }, data: { addressBookContactId: existing.addressBookContactId } });
+      await prisma.contact.updateMany({ where: { accountId: imported.accountId, phone: item.normalizedPhone }, data: { addressBookContactId: existing.addressBookContactId } });
       updatedRows += 1;
     } else {
       const addressBookContact = await prisma.addressBookContact.create({ data: { accountId: imported.accountId, createdById: imported.createdById, ...data, phones: { create: { accountId: imported.accountId, normalizedPhone: item.normalizedPhone } } } });
-      await prisma.contact.updateMany({ where: { accountId: imported.accountId, phone: item.normalizedPhone.slice(1) }, data: { addressBookContactId: addressBookContact.id } });
+      await prisma.contact.updateMany({ where: { accountId: imported.accountId, phone: item.normalizedPhone }, data: { addressBookContactId: addressBookContact.id } });
       createdRows += 1;
     }
   }
