@@ -51,7 +51,7 @@ export function normalizePhone(value: unknown, defaultCountry = "ES") {
 
 export function phoneFromJid(jid: string | null | undefined) {
   if (!jid?.endsWith("@s.whatsapp.net")) return null;
-  const digits = jid.split("@")[0].replace(/\D/g, "");
+  const digits = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
   return digits.length >= 7 && digits.length <= 15 ? `+${digits}` : null;
 }
 
@@ -159,12 +159,12 @@ export async function previewImport(fileName: string, content: Buffer, defaultCo
   return { fileHash: createHash("sha256").update(content).digest("hex"), rows };
 }
 
-export async function reconcileWhatsAppContact(accountId: string, input: { jid: string; displayName?: string | null; pushName?: string | null; origin: AddressBookContactOrigin }) {
-  const phone = phoneFromJid(input.jid);
+export async function reconcileWhatsAppContact(accountId: string, input: { jid: string; phoneJid?: string | null; displayName?: string | null; pushName?: string | null; origin: AddressBookContactOrigin }) {
+  const phone = phoneFromJid(input.phoneJid ?? input.jid);
   const technical = await prisma.contact.upsert({
     where: { accountId_jid: { accountId, jid: input.jid } },
     create: { accountId, jid: input.jid, phone, displayName: input.displayName ?? null, pushName: input.pushName ?? null },
-    update: { phone, displayName: input.displayName ?? undefined, pushName: input.pushName ?? undefined, syncedAt: new Date() },
+    update: { phone: phone ?? undefined, displayName: input.displayName ?? undefined, pushName: input.pushName ?? undefined, syncedAt: new Date() },
   });
   if (!phone) return technical;
   const known = await prisma.addressBookPhone.findUnique({ where: { accountId_normalizedPhone: { accountId, normalizedPhone: phone } }, include: { addressBookContact: true } });

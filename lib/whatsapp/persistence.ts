@@ -10,12 +10,13 @@ export async function upsertContact(accountId: string, contact: { jid: string; d
 }
 
 export async function persistMessage(accountId: string, message: NormalizedMessage) {
+  const contact = message.conversationType === "DIRECT"
+    ? await reconcileWhatsAppContact(accountId, { jid: message.conversationJid, phoneJid: message.phoneJid, origin: message.direction === "INBOUND" ? AddressBookContactOrigin.EXTERNAL : AddressBookContactOrigin.WHATSAPP_SYNC })
+    : null;
+  // Identity metadata may arrive again with a replayed event. Reconcile it
+  // before deduplicating the message so an existing LID contact gains its phone.
   const exists = await prisma.message.findUnique({ where: { accountId_externalId: { accountId, externalId: message.externalId } }, select: { id: true } });
   if (exists) return false;
-
-  const contact = message.conversationType === "DIRECT"
-    ? await reconcileWhatsAppContact(accountId, { jid: message.conversationJid, origin: message.direction === "INBOUND" ? AddressBookContactOrigin.EXTERNAL : AddressBookContactOrigin.WHATSAPP_SYNC })
-    : null;
   try {
     await prisma.$transaction(async (transaction) => {
       const conversation = await transaction.conversation.upsert({
