@@ -1,0 +1,170 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { LinkAddressBookControl } from "./link-address-book-control";
+import { MessageComposer } from "./message-composer";
+
+type Role = "ADMIN" | "AGENT" | "VIEWER";
+type Account = { id: string; name: string; slug: string; isActive: boolean };
+type AddressBookContact = { displayName: string; origin: string } | null;
+type Contact = { id: string; displayName: string | null; pushName: string | null; phone: string | null; addressBookContact: AddressBookContact } | null;
+type Conversation = { id: string; accountId: string; jid: string; type: "DIRECT" | "GROUP"; lastMessageAt: string | null; lastMessagePreview: string | null; unreadCount: number; contact: Contact; account: Pick<Account, "id" | "name" | "slug"> };
+type Message = { id: string; direction: "INBOUND" | "OUTBOUND"; body: string | null; sentAt: string; messageType: string };
+type ConversationResponse = { conversation: Conversation; messages: Message[]; nextCursor: string | null };
+
+function conversationName(conversation: Pick<Conversation, "contact" | "type">) {
+  const contact = conversation.contact;
+  return contact?.addressBookContact?.displayName || contact?.displayName || contact?.pushName || (contact?.phone ? `•••• ${contact.phone.slice(-4)}` : conversation.type === "GROUP" ? "Grupo" : "Conversación");
+}
+
+function initials(value: string) {
+  return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "W";
+}
+
+function formatTime(value: string) {
+  return new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function formatDay(value: string) {
+  return new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value));
+}
+
+function mergeById<T extends { id: string }>(older: T[], newer: T[]) {
+  const seen = new Set<string>();
+  return [...older, ...newer].filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+}
+
+export function InboxClient({ accounts, initialRows, initialNextCursor, initialSelectedId, accountId, filter, search, role, connectionStatuses, linkCandidates, linkCandidateContactId }: {
+  accounts: Account[];
+  initialRows: Conversation[];
+  initialNextCursor: string | null;
+  initialSelectedId: string | null;
+  accountId?: string;
+  filter: string;
+  search?: string;
+  role: Role;
+  connectionStatuses: Record<string, string>;
+  linkCandidates: { id: string; displayName: string }[];
+  linkCandidateContactId?: string;
+}) {
+  const router = useRouter();
+  const [rows, setRows] = useState(initialRows);
+  const [nextCursor, setNextCursor] = useState(initialNextCursor);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  const [detail, setDetail] = useState<ConversationResponse | null>(null);
+  const [loadingConversation, setLoadingConversation] = useState(false);
+  const [conversationError, setConversationError] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const canManage = role === "ADMIN" || role === "AGENT";
+
+  const pageUrl = useCallback((changes: { account?: string | null; filter?: string; selected?: string | null } = {}) => {
+    const params = new URLSearchParams();
+    const selectedAccount = changes.account === undefined ? accountId : changes.account;
+    const selectedFilter = changes.filter ?? filter;
+    const selectedConversation = changes.selected === undefined ? selectedId : changes.selected;
+    if (selectedAccount) params.set("account", selectedAccount);
+    if (selectedFilter && selectedFilter !== "all") params.set("filter", selectedFilter);
+    if (search) params.set("q", search);
+    if (selectedConversation) params.set("selected", selectedConversation);
+    const query = params.toString();
+    return `/dashboard${query ? `?${query}` : ""}`;
+  }, [accountId, filter, search, selectedId]);
+
+  const markRead = useCallback(async (id: string) => {
+    if (!canManage) return;
+    const response = await fetch(`/api/conversations/${id}/read`, { method: "POST" });
+    if (!response.ok) return;
+    setRows((current) => current.map((item) => item.id === id ? { ...item, unreadCount: 0 } : item));
+    setDetail((current) => current?.conversation.id === id ? { ...current, conversation: { ...current.conversation, unreadCount: 0 } } : current);
+  }, [canManage]);
+
+  const loadConversation = useCallback(async (id: string, quiet = false) => {
+    if (!quiet) { setLoadingConversation(true); setConversationError(""); }
+    try {
+      const response = await fetch(`/api/conversations/${id}`, { cache: "no-store" });
+      const data = await response.json().catch(() => null) as ConversationResponse | null;
+      if (!response.ok || !data) throw new Error("conversation_unavailable");
+      setDetail(data);
+      setRows((current) => {
+        const existing = current.find((item) => item.id === data.conversation.id);
+        const updated = existing ? current.map((item) => item.id === data.conversation.id ? { ...item, ...data.conversation } : item) : [data.conversation, ...current];
+        return updated;
+      });
+      if (data.conversation.unreadCount > 0) void markRead(id);
+    } catch {
+      if (!quiet) setConversationError("No se pudo cargar esta conversación. Vuelve a intentarlo.");
+    } finally {
+      if (!quiet) setLoadingConversation(false);
+    }
+  }, [markRead]);
+
+  useEffect(() => {
+    if (!selectedId) { setDetail(null); setConversationError(""); return; }
+    void loadConversation(selectedId);
+  }, [loadConversation, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const timer = window.setInterval(() => void loadConversation(selectedId, true), 7000);
+    return () => window.clearInterval(timer);
+  }, [loadConversation, selectedId]);
+
+  const selectedConversation = detail?.conversation || rows.find((conversation) => conversation.id === selectedId) || null;
+  const selectedName = selectedConversation ? conversationName(selectedConversation) : "";
+  const sendingEnabled = Boolean(selectedConversation && canManage && connectionStatuses[selectedConversation.accountId] === "CONNECTED");
+  const hasExternalContact = selectedConversation?.contact?.addressBookContact?.origin === "EXTERNAL";
+  const filters = useMemo(() => [["all", "Todas"], ["unread", "No leídas"], ["direct", "Directas"], ["group", "Grupos"]], []);
+
+  function selectConversation(id: string) {
+    setSelectedId(id);
+    setDetail(null);
+    setConversationError("");
+    router.replace(pageUrl({ selected: id }));
+  }
+
+  function closeConversation() {
+    setSelectedId(null);
+    setDetail(null);
+    router.replace(pageUrl({ selected: null }));
+  }
+
+  async function loadOlder() {
+    if (!selectedId || !detail?.nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const response = await fetch(`/api/conversations/${selectedId}?cursor=${encodeURIComponent(detail.nextCursor)}`, { cache: "no-store" });
+      const data = await response.json().catch(() => null) as ConversationResponse | null;
+      if (!response.ok || !data) throw new Error("messages_unavailable");
+      setDetail((current) => current?.conversation.id === selectedId ? { ...current, messages: mergeById(data.messages, current.messages), nextCursor: data.nextCursor } : current);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  async function loadMoreConversations() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const params = new URLSearchParams({ cursor: nextCursor, filter });
+      if (accountId) params.set("accountId", accountId);
+      if (search) params.set("q", search);
+      const response = await fetch(`/api/conversations?${params.toString()}`, { cache: "no-store" });
+      const data = await response.json().catch(() => null) as { rows?: Conversation[]; nextCursor?: string | null } | null;
+      const extraRows = data?.rows;
+      if (!response.ok || !extraRows) throw new Error("conversations_unavailable");
+      setRows((current) => mergeById(current, extraRows));
+      setNextCursor(data.nextCursor ?? null);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  let previousDay = "";
+  return <main className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6"><div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">WhatsAppBusiness</p><h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Conversaciones</h1></div><div className="flex gap-2"><Link href="/dashboard/agenda" className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:border-emerald-300 hover:text-emerald-700">Agenda</Link><Link href="/dashboard/contactos" className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:border-emerald-300 hover:text-emerald-700">Contactos</Link></div></div><nav className="mb-4 flex gap-2 overflow-x-auto pb-1 text-sm" aria-label="Cuentas"><Link href={pageUrl({ account: null, selected: null })} className={`whitespace-nowrap rounded-full px-3 py-1.5 ${!accountId ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>Todas las cuentas</Link>{accounts.map((account) => <Link key={account.id} href={pageUrl({ account: account.id, selected: null })} className={`whitespace-nowrap rounded-full px-3 py-1.5 ${accountId === account.id ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>{account.name}</Link>)}</nav><div className="grid min-h-[calc(100dvh-13rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:grid-cols-[22rem_minmax(0,1fr)]"><aside className={`min-h-0 flex-col border-r border-slate-200 bg-white ${selectedId ? "hidden md:flex" : "flex"}`}><form className="border-b border-slate-100 p-3"><input type="hidden" name="account" value={accountId || ""}/><input type="hidden" name="filter" value={filter === "all" ? "" : filter}/><label className="sr-only" htmlFor="conversation-search">Buscar conversaciones</label><input id="conversation-search" name="q" defaultValue={search} placeholder="Buscar conversaciones" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"/></form><nav className="flex gap-1 overflow-x-auto border-b border-slate-100 p-2" aria-label="Filtros">{filters.map(([id, label]) => <Link key={id} href={pageUrl({ filter: id, selected: null })} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === id || (id === "all" && !filter) ? "bg-emerald-50 text-emerald-800" : "text-slate-500 hover:bg-slate-50"}`}>{label}</Link>)}</nav><div className="min-h-0 flex-1 overflow-y-auto">{rows.length ? rows.map((conversation) => { const name = conversationName(conversation); const selected = conversation.id === selectedId; const external = conversation.contact?.addressBookContact?.origin === "EXTERNAL"; return <button key={conversation.id} type="button" onClick={() => selectConversation(conversation.id)} className={`flex w-full gap-3 border-b border-slate-100 px-3 py-3 text-left transition ${selected ? "bg-emerald-50" : "hover:bg-slate-50"}`}><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">{initials(name)}</span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><strong className="truncate text-sm text-slate-800">{name}</strong>{conversation.lastMessageAt && <time className="shrink-0 text-[11px] text-slate-400">{formatTime(conversation.lastMessageAt)}</time>}</span><span className="mt-0.5 flex items-center gap-2"><span className={`min-w-0 flex-1 truncate text-xs ${conversation.unreadCount > 0 ? "font-medium text-slate-700" : "text-slate-500"}`}>{conversation.lastMessagePreview || "Sin texto"}</span>{conversation.unreadCount > 0 && <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{conversation.unreadCount}</span>}</span><span className="mt-1 flex gap-1">{external && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-800">Externo</span>}{!accountId && <span className="truncate text-[10px] text-slate-400">{conversation.account.name}</span>}</span></span></button>; }) : <div className="p-8 text-center text-sm text-slate-500"><p className="font-medium text-slate-700">No hay conversaciones</p><p className="mt-1">Los nuevos mensajes aparecerán aquí.</p></div>}</div>{nextCursor && <button type="button" onClick={() => void loadMoreConversations()} disabled={loadingMore} className="border-t border-slate-100 px-3 py-3 text-sm font-medium text-emerald-700 disabled:opacity-50">{loadingMore ? "Cargando…" : "Cargar más conversaciones"}</button>}</aside><section className={`min-h-0 flex-col bg-slate-50 ${selectedId ? "flex" : "hidden md:flex"}`}>{!selectedId ? <div className="m-auto max-w-sm px-8 text-center"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-xl">💬</div><h2 className="mt-4 text-lg font-semibold text-slate-800">Selecciona una conversación</h2><p className="mt-2 text-sm text-slate-500">Abre un chat para ver sus mensajes y responder desde aquí.</p></div> : <>{selectedConversation && <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:px-5"><button type="button" onClick={closeConversation} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 md:hidden" aria-label="Volver a conversaciones">←</button><span className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-800">{initials(selectedName)}</span><div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-slate-900">{selectedName}</h2><p className="truncate text-xs text-slate-500">{selectedConversation.account.name}{hasExternalContact ? " · Contacto externo" : ""}</p></div>{hasExternalContact && <span className="hidden rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800 sm:inline">Externo</span>}</header>}<div className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef5f2)] px-3 py-4 sm:px-6">{loadingConversation && <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>}{conversationError && <div className="mx-auto max-w-md rounded-xl border border-rose-200 bg-rose-50 p-4 text-center text-sm text-rose-800"><p>{conversationError}</p><button type="button" onClick={() => selectedId && void loadConversation(selectedId)} className="mt-2 font-medium underline">Reintentar</button></div>}{detail && <div className="mx-auto flex max-w-3xl flex-col gap-2">{detail.nextCursor && <button type="button" onClick={() => void loadOlder()} disabled={loadingMore} className="mx-auto rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-200 disabled:opacity-50">{loadingMore ? "Cargando…" : "Cargar mensajes anteriores"}</button>}{detail.messages.length ? detail.messages.map((message) => { const day = formatDay(message.sentAt); const showDay = day !== previousDay; previousDay = day; const outbound = message.direction === "OUTBOUND"; return <div key={message.id}>{showDay && <p className="my-3 text-center text-[11px] font-medium text-slate-400"><span className="rounded-full bg-white px-3 py-1.5 shadow-sm">{day}</span></p>}<div className={`flex ${outbound ? "justify-end" : "justify-start"}`}><article className={`max-w-[88%] rounded-2xl px-3 py-2.5 text-sm shadow-sm sm:max-w-[74%] ${outbound ? "rounded-br-md bg-emerald-600 text-white" : "rounded-bl-md bg-white text-slate-800"}`}><p className="whitespace-pre-wrap break-words leading-relaxed">{message.body || "Mensaje sin texto"}</p><time className={`mt-1 block text-right text-[10px] ${outbound ? "text-emerald-100" : "text-slate-400"}`}>{formatTime(message.sentAt)}</time></article></div></div>; }) : <p className="py-10 text-center text-sm text-slate-500">Esta conversación todavía no contiene mensajes de texto.</p>}{selectedConversation?.contact && !selectedConversation.contact.addressBookContact && selectedConversation.contact.id === linkCandidateContactId && <div className="mt-4 rounded-xl bg-white p-3 shadow-sm"><p className="text-xs font-medium text-slate-600">Relacionar con un contacto de agenda</p><LinkAddressBookControl contactId={selectedConversation.contact.id} contacts={linkCandidates}/></div>}</div>}</div>{selectedConversation && <MessageComposer conversationId={selectedConversation.id} enabled={sendingEnabled} onQueued={() => selectedId && void loadConversation(selectedId, true)}/>}</>}</section></div></main>;
+}

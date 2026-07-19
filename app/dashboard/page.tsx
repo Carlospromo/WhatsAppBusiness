@@ -1,23 +1,46 @@
-import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
-import { listConversations } from "@/lib/inbox";
-import { canSendMessages } from "@/lib/authorization";
-import { prisma } from "@/lib/prisma";
 import { accountsForUser, canAccessAccount } from "@/lib/account";
-import { MessageComposer } from "./message-composer";
-import { LinkAddressBookControl } from "./link-address-book-control";
+import { listConversations } from "@/lib/inbox";
+import { prisma } from "@/lib/prisma";
+import { InboxClient } from "./inbox-client";
 
-type ConversationContact = { displayName: string | null; pushName: string | null; phone: string | null; addressBookContact: { displayName: string; origin: string } | null } | null;
-function nameFor(contact: ConversationContact, type: string) { return contact?.addressBookContact?.displayName || contact?.displayName || contact?.pushName || (contact?.phone ? `•••• ${contact.phone.slice(-4)}` : type === "GROUP" ? "Grupo" : "Conversación"); }
+const validFilters = new Set(["all", "unread", "direct", "group"]);
 
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ selected?: string; filter?: string; q?: string; account?: string }> }) {
-  const params = await searchParams; const user = await getCurrentUser(); if (!user) return null;
-  const accounts = await accountsForUser(user); const accountId = params.account && await canAccessAccount(user, params.account) ? params.account : undefined;
-  const { rows } = await listConversations({ accountIds: accounts.filter((account) => account.isActive).map((account) => account.id), accountId, filter: params.filter || "all", search: params.q });
-  const selected = rows.find((conversation) => conversation.id === params.selected) || rows[0];
-  const connection = selected ? await prisma.whatsAppConnection.findUnique({ where: { accountId: selected.accountId }, select: { status: true } }) : null;
-  const messages = selected ? await prisma.message.findMany({ where: { conversationId: selected.id, accountId: selected.accountId }, orderBy: { sentAt: "asc" }, take: 50 }) : [];
-  const linkCandidates = selected?.contact && !selected.contact.addressBookContact && user.role !== "VIEWER" ? await prisma.addressBookContact.findMany({ where: { accountId: selected.accountId }, select: { id: true, displayName: true }, orderBy: { displayName: "asc" }, take: 50 }) : [];
-  const query = accountId ? `&account=${accountId}` : "";
-  return <main className="mx-auto max-w-6xl p-3 sm:p-6"><div className="mb-3 flex justify-between"><div><h1 className="text-xl font-semibold">Conversaciones</h1><nav className="mt-1 flex gap-2 text-xs"><Link href="/dashboard" className={!accountId ? "font-semibold text-emerald-700" : "text-slate-500"}>Todas las cuentas</Link>{accounts.map((account) => <Link key={account.id} href={`/dashboard?account=${account.id}`} className={accountId === account.id ? "font-semibold text-emerald-700" : "text-slate-500"}>{account.name}</Link>)}</nav></div><div className="flex gap-3"><Link href="/dashboard/agenda" className="text-sm font-medium text-emerald-700">Agenda</Link><Link href="/dashboard/contactos" className="text-sm font-medium text-emerald-700">Contactos</Link></div></div><div className="grid min-h-[70vh] grid-cols-1 overflow-hidden rounded-xl border border-slate-200 bg-white md:grid-cols-[20rem_1fr]"><aside className={selected ? "hidden border-r md:block" : "border-r"}><form className="border-b p-3"><input type="hidden" name="account" value={accountId || ""}/><input name="q" defaultValue={params.q} placeholder="Buscar" className="w-full rounded-md border p-2 text-sm"/></form><nav className="flex gap-2 overflow-auto border-b p-2 text-xs">{[["all", "Todas"], ["unread", "No leídas"], ["direct", "Directas"], ["group", "Grupos"]].map(([id, label]) => <Link key={id} href={`/dashboard?filter=${id}${query}`} className={params.filter === id ? "font-semibold text-emerald-700" : "text-slate-500"}>{label}</Link>)}</nav>{rows.map((conversation) => <Link key={conversation.id} href={`/dashboard?selected=${conversation.id}${query}`} className="block border-b p-3 hover:bg-slate-50"><div className="flex justify-between gap-2"><strong className="truncate text-sm">{nameFor(conversation.contact, conversation.type)}</strong>{conversation.unreadCount > 0 && <span className="rounded-full bg-emerald-700 px-2 text-xs text-white">{conversation.unreadCount}</span>}</div><p className="truncate text-xs text-slate-500">{conversation.lastMessagePreview || "Sin texto"}</p>{conversation.contact?.addressBookContact?.origin === "EXTERNAL" && <span className="text-[10px] text-amber-700">Contacto externo</span>}{!accountId && <span className="ml-2 text-[10px] text-slate-400">{conversation.account.name}</span>}</Link>)}</aside><section className={selected ? "flex min-h-[70vh] flex-col" : "hidden md:flex md:items-center md:justify-center"}>{selected ? <><header className="border-b p-4"><strong>{nameFor(selected.contact, selected.type)}</strong><span className="ml-2 text-xs text-slate-500">{selected.account.name}</span>{selected.contact?.addressBookContact?.origin === "EXTERNAL" && <span className="ml-2 rounded bg-amber-100 px-2 py-1 text-xs text-amber-800">Externo</span>}{selected.contact && !selected.contact.addressBookContact && <LinkAddressBookControl contactId={selected.contact.id} contacts={linkCandidates}/>}</header><div className="flex-1 space-y-2 overflow-auto bg-slate-50 p-4">{messages.map((message) => <div key={message.id} className={message.direction === "OUTBOUND" ? "ml-auto max-w-[80%] rounded-lg bg-emerald-100 p-3 text-sm" : "max-w-[80%] rounded-lg bg-white p-3 text-sm shadow-sm"}><p className="whitespace-pre-wrap break-words">{message.body}</p><time className="mt-1 block text-right text-[10px] text-slate-500">{message.sentAt.toLocaleString("es-ES")}</time></div>)}</div><MessageComposer conversationId={selected.id} enabled={canSendMessages(user.role) && connection?.status === "CONNECTED"}/></> : <p className="text-slate-500">Selecciona una conversación.</p>}</section></div></main>;
+  const params = await searchParams;
+  const user = await getCurrentUser();
+  if (!user) return null;
+
+  const accounts = await accountsForUser(user);
+  const activeAccounts = accounts.filter((account) => account.isActive);
+  const accountId = params.account && await canAccessAccount(user, params.account) ? params.account : undefined;
+  const filter = validFilters.has(params.filter || "") ? params.filter || "all" : "all";
+  const search = params.q?.trim().slice(0, 100) || undefined;
+  const { rows, nextCursor } = await listConversations({ accountIds: activeAccounts.map((account) => account.id), accountId, filter, search });
+  const selected = params.selected || null;
+  const selectedConversation = selected ? rows.find((conversation) => conversation.id === selected) : null;
+  const linkCandidates = selectedConversation?.contact && !selectedConversation.contact.addressBookContact && user.role !== "VIEWER"
+    ? await prisma.addressBookContact.findMany({ where: { accountId: selectedConversation.accountId }, select: { id: true, displayName: true }, orderBy: { displayName: "asc" }, take: 50 })
+    : [];
+  const connections = await prisma.whatsAppConnection.findMany({ where: { accountId: { in: activeAccounts.map((account) => account.id) } }, select: { accountId: true, status: true } });
+  const connectionStatuses = Object.fromEntries(connections.map((connection) => [connection.accountId, connection.status]));
+  const clientRows = rows.map((conversation) => ({
+    id: conversation.id,
+    accountId: conversation.accountId,
+    jid: conversation.jid,
+    type: conversation.type,
+    lastMessageAt: conversation.lastMessageAt?.toISOString() ?? null,
+    lastMessagePreview: conversation.lastMessagePreview,
+    unreadCount: conversation.unreadCount,
+    contact: conversation.contact ? {
+      id: conversation.contact.id,
+      displayName: conversation.contact.displayName,
+      pushName: conversation.contact.pushName,
+      phone: conversation.contact.phone,
+      addressBookContact: conversation.contact.addressBookContact ? { displayName: conversation.contact.addressBookContact.displayName, origin: conversation.contact.addressBookContact.origin } : null,
+    } : null,
+    account: conversation.account,
+  }));
+
+  return <InboxClient key={`${accountId || "all"}:${filter}:${search || ""}:${selected || ""}`} accounts={activeAccounts} initialRows={clientRows} initialNextCursor={nextCursor} initialSelectedId={selected} accountId={accountId} filter={filter} search={search} role={user.role} connectionStatuses={connectionStatuses} linkCandidates={linkCandidates} linkCandidateContactId={selectedConversation?.contact?.id}/>;
 }

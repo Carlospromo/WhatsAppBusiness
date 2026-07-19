@@ -8,6 +8,14 @@ export function parseCursor(value: string | null) {
   return value && /^[a-zA-Z0-9_-]{10,40}$/.test(value) ? value : undefined;
 }
 
+export function messagesFromNewestPage<T extends { id: string }>(results: T[], pageSize = 50) {
+  const newest = results.slice(0, pageSize);
+  return {
+    messages: [...newest].reverse(),
+    nextCursor: results.length > pageSize ? newest[newest.length - 1]?.id ?? null : null,
+  };
+}
+
 export function validateMessageBody(value: unknown) {
   if (typeof value !== "string") return null;
   const body = value.trim();
