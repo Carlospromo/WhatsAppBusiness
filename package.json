@@ -18,6 +18,9 @@
     "db:import-legacy-sqlite": "tsx scripts/import-legacy-sqlite.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1090.0",
+    "@aws-sdk/lib-storage": "^3.1090.0",
+    "@aws-sdk/s3-request-presigner": "^3.1090.0",
     "@prisma/client": "^6.16.0",
     "@types/better-sqlite3": "^7.6.13",
     "@whiskeysockets/baileys": "^6.7.16",
