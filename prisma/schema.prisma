@@ -38,6 +38,13 @@ enum OutboundMessageStatus {
   FAILED
 }
 
+enum ReadReceiptStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
 enum MediaAttachmentKind {
   IMAGE
   AUDIO
@@ -90,6 +97,7 @@ model User {
   sessions              Session[]
   auditLogs             AuditLog[]
   outboundRequests      OutboundMessageRequest[]
+  readReceiptRequests   ReadReceiptRequest[]
   assignedConversations Conversation[]              @relation("ConversationAssignee")
   notes                 ConversationNote[]
   accountMemberships    WhatsAppAccountMembership[]
@@ -126,6 +134,7 @@ model WhatsAppAccount {
   messages            Message[]
   mediaAttachments    MediaAttachment[]
   outboundRequests    OutboundMessageRequest[]
+  readReceiptRequests ReadReceiptRequest[]
   tags                ConversationTag[]
   memberships         WhatsAppAccountMembership[]
   auditLogs           AuditLog[]
@@ -289,6 +298,7 @@ model Conversation {
   assignedTo         User?                    @relation("ConversationAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   messages           Message[]
   outboundRequests   OutboundMessageRequest[]
+  readReceiptRequests ReadReceiptRequest[]
   notes              ConversationNote[]
   tags               ConversationTag[]
   createdAt          DateTime                 @default(now())
@@ -307,6 +317,7 @@ model Message {
   conversationId   String
   direction        MessageDirection
   senderJid        String
+  receiptParticipant String?
   body             String?
   messageType      String
   sentAt           DateTime
@@ -315,10 +326,41 @@ model Message {
   account          WhatsAppAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
   conversation     Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   mediaAttachments MediaAttachment[]
+  readReceiptRequests ReadReceiptMessage[]
 
   @@unique([accountId, externalId])
   @@index([conversationId, sentAt])
   @@index([accountId, importedAt])
+}
+
+model ReadReceiptRequest {
+  id            String            @id @default(cuid())
+  accountId     String
+  conversationId String
+  requestedById String
+  status        ReadReceiptStatus @default(PENDING)
+  attemptCount  Int               @default(0)
+  lastAttemptAt DateTime?
+  safeError     String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  sentAt        DateTime?
+  account       WhatsAppAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation  Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  requestedBy   User              @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  messages      ReadReceiptMessage[]
+
+  @@index([accountId, status, createdAt])
+  @@index([conversationId])
+}
+
+model ReadReceiptMessage {
+  requestId String
+  messageId String @unique
+  request   ReadReceiptRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  message   Message            @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@id([requestId, messageId])
 }
 
 model MediaAttachment {

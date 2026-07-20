@@ -155,3 +155,11 @@ Los archivos no se almacenan en PostgreSQL ni en el volumen Railway. PostgreSQL 
 El worker procesa los adjuntos de forma secuencial por cuenta, conserva un descriptor cifrado solo mientras una descarga está pendiente y lo elimina al completar la subida. Los enlaces de lectura son temporales, se emiten únicamente tras comprobar sesión y permiso sobre la cuenta, y no se guardan en la base de datos. Una descarga que no pueda recuperarse tras los reintentos se muestra como archivo no disponible.
 
 Mantén una sola réplica Railway. Para un mantenimiento futuro, elimina primero el objeto privado de R2 y después su metadato en PostgreSQL.
+
+## Sincronización de lecturas con WhatsApp
+
+Al abrir una conversación, un `ADMIN` o `AGENT` marca sus mensajes entrantes como leídos en la bandeja y crea una solicitud persistente para sincronizar esa lectura con WhatsApp. El worker Baileys, que es el único proceso con sockets activos, envía el recibo de lectura de cada mensaje de forma secuencial por cuenta.
+
+No se crean solicitudes al listar, buscar o actualizar conversaciones en segundo plano; solo al abrir un hilo que todavía tiene mensajes sin leer. Si una cuenta está desconectada, la solicitud queda pendiente y se reintenta al recuperar la conexión. Los reintentos agotados se registran con un error seguro y sin contenido de mensajes ni identificadores técnicos.
+
+WhatsApp aplica finalmente la configuración de privacidad de recibos de lectura del teléfono vinculado. Mantén una sola réplica Railway para que el worker y su cola persistente sigan teniendo un único consumidor.

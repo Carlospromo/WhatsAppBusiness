@@ -11,6 +11,7 @@ import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
 import { claimNextOutboundRequest, completeOutboundRequest, failOutboundRequest } from "./lib/whatsapp/outbound";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
+import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
 let stopping = false;
@@ -94,9 +95,29 @@ async function processPendingMedia() {
   }
 }
 
+async function processReadReceipts() {
+  for (const [accountId, socket] of sockets) {
+    if (!socket.user) continue;
+    await enqueueAccountWork(accountId, async () => {
+      const request = await claimNextReadReceiptRequest(accountId);
+      if (!request) return;
+      const keys = readReceiptKeys(request.conversation, request.messages.map(({ message }) => message));
+      try {
+        // Baileys owns the active socket. The web/API process only creates a
+        // durable request; it never emits WhatsApp receipts itself.
+        if (keys.length) await socket.readMessages(keys);
+        await completeReadReceiptRequest(request);
+      } catch {
+        await failReadReceiptRequest(request);
+      }
+    });
+  }
+}
+
 void syncAccounts();
 const accountsTimer = setInterval(() => void syncAccounts(), 5_000);
 const outboundTimer = setInterval(() => void processOutbound(), 1_500);
 const mediaTimer = setInterval(() => void processPendingMedia(), 10_000);
-async function shutdown() { stopping = true; clearInterval(accountsTimer); clearInterval(outboundTimer); clearInterval(mediaTimer); for (const socket of sockets.values()) try { await socket.end(undefined); } catch { /* ignore */ } await prisma.$disconnect(); process.exit(0); }
+const readReceiptTimer = setInterval(() => void processReadReceipts(), 2_000);
+async function shutdown() { stopping = true; clearInterval(accountsTimer); clearInterval(outboundTimer); clearInterval(mediaTimer); clearInterval(readReceiptTimer); for (const socket of sockets.values()) try { await socket.end(undefined); } catch { /* ignore */ } await prisma.$disconnect(); process.exit(0); }
 process.once("SIGTERM", shutdown); process.once("SIGINT", shutdown);
