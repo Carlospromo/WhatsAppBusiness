@@ -23,6 +23,10 @@ export function validateMessageBody(value: unknown) {
   return body.length > 0 && body.length <= textLimit ? body : null;
 }
 
+export function directConversationJid(normalizedPhone: string) {
+  return /^\+[1-9]\d{6,14}$/.test(normalizedPhone) ? `${normalizedPhone.slice(1)}@s.whatsapp.net` : null;
+}
+
 export async function listConversations(query: { accountIds: string[]; accountId?: string; search?: string; filter?: string; cursor?: string }) {
   const search = query.search?.trim().slice(0, 100);
   const where = {
@@ -55,6 +59,26 @@ export async function listConversations(query: { accountIds: string[]; accountId
 
 export async function queueOutboundMessage(conversationId: string, accountId: string, userId: string, body: string) {
   return prisma.outboundMessageRequest.create({ data: { accountId, conversationId, requestedById: userId, body, status: OutboundMessageStatus.PENDING } });
+}
+
+export async function createDirectConversationAndQueue(accountId: string, userId: string, normalizedPhone: string, body: string) {
+  const jid = directConversationJid(normalizedPhone);
+  if (!jid) return null;
+  const knownPhone = await prisma.addressBookPhone.findUnique({ where: { accountId_normalizedPhone: { accountId, normalizedPhone } }, include: { addressBookContact: { select: { displayName: true } } } });
+  return prisma.$transaction(async (transaction) => {
+    const contact = await transaction.contact.upsert({
+      where: { accountId_jid: { accountId, jid } },
+      create: { accountId, jid, phone: normalizedPhone, displayName: knownPhone?.addressBookContact.displayName ?? null, addressBookContactId: knownPhone?.addressBookContactId ?? null },
+      update: { phone: normalizedPhone, displayName: knownPhone?.addressBookContact.displayName ?? undefined, addressBookContactId: knownPhone?.addressBookContactId ?? undefined, syncedAt: new Date() },
+    });
+    const conversation = await transaction.conversation.upsert({
+      where: { accountId_jid: { accountId, jid } },
+      create: { accountId, jid, type: ConversationType.DIRECT, contactId: contact.id },
+      update: { contactId: contact.id },
+    });
+    const request = await transaction.outboundMessageRequest.create({ data: { accountId, conversationId: conversation.id, requestedById: userId, body, status: OutboundMessageStatus.PENDING } });
+    return { conversation, request };
+  });
 }
 
 export { MessageDirection, OutboundMessageStatus };
