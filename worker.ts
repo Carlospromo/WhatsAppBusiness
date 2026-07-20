@@ -10,6 +10,7 @@ import { maskPhone, normalizeWhatsAppMessage } from "./lib/whatsapp/normalize";
 import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
 import { claimNextOutboundRequest, completeOutboundRequest, failOutboundRequest } from "./lib/whatsapp/outbound";
+import { outboundDestinationJid } from "./lib/whatsapp/outbound-destination";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
 import { applyHistoryRecoveryPage, claimHistoryRecovery, failHistoryRecovery, requestHistoryPage } from "./lib/whatsapp/history-recovery";
@@ -86,9 +87,24 @@ async function syncAccounts() {
 async function processOutbound() {
   for (const [accountId, socket] of sockets) {
     if (!socket.user) continue;
-    const request = await claimNextOutboundRequest(accountId);
-    if (!request) continue;
-    try { const sent = await socket.sendMessage(request.conversation.jid, { text: request.body }); const externalId = sent?.key.id; if (!externalId) throw new Error("missing message id"); await completeOutboundRequest(request, externalId); if (request.conversation.type === "DIRECT") try { await refreshContactProfilePicture(accountId, socket, request.conversation.jid); } catch { /* A profile picture must never change the outcome of an already sent message. */ } } catch { await failOutboundRequest(request.id); }
+    await enqueueAccountWork(accountId, async () => {
+      const request = await claimNextOutboundRequest(accountId);
+      if (!request) return;
+      const destinationJid = outboundDestinationJid(request.conversation);
+      if (!destinationJid) {
+        await failOutboundRequest(request, "No se pudo determinar un número de WhatsApp válido para esta conversación.");
+        return;
+      }
+      try {
+        const sent = await socket.sendMessage(destinationJid, { text: request.body });
+        const externalId = sent?.key.id;
+        if (!externalId) throw new Error("missing message id");
+        await completeOutboundRequest(request, externalId);
+        if (request.conversation.type === "DIRECT") try { await refreshContactProfilePicture(accountId, socket, destinationJid); } catch { /* A profile picture must never change the outcome of an already sent message. */ }
+      } catch {
+        await failOutboundRequest(request);
+      }
+    });
   }
 }
 
