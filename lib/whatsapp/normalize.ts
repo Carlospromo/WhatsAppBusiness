@@ -23,6 +23,8 @@ export type NormalizedMessage = {
   conversationJid: string;
   senderJid: string;
   phoneJid?: string;
+  /** Original group participant key required by Baileys read receipts. */
+  receiptParticipant?: string;
   direction: "INBOUND" | "OUTBOUND";
   body: string;
   messageType: "text" | "image" | "audio" | "video";
@@ -149,6 +151,7 @@ export function normalizeWhatsAppMessage(message: BaileysMessage): NormalizedMes
       ? message.key.participantPn ?? message.key.participantAlt ?? message.key.participant ?? conversationJid
       : phoneJid ?? conversationJid,
     phoneJid,
+    receiptParticipant: conversationType === "GROUP" ? message.key.participant ?? undefined : undefined,
     direction: fromMe ? "OUTBOUND" : "INBOUND",
     body,
     messageType: incomingMedia?.kind === MediaAttachmentKind.IMAGE ? "image"

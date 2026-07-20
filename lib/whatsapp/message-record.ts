@@ -8,6 +8,7 @@ export function messageRecordData(accountId: string, conversationId: string, mes
     externalId: message.externalId,
     direction: message.direction,
     senderJid: message.senderJid,
+    receiptParticipant: message.receiptParticipant,
     body: message.body,
     messageType: message.messageType,
     sentAt: message.sentAt,
