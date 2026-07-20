@@ -5,6 +5,7 @@ import { normalizePhone } from "@/lib/address-book";
 import { canSendMessages } from "@/lib/authorization";
 import { createDirectConversationAndQueue, validateMessageBody } from "@/lib/inbox";
 import { prisma } from "@/lib/prisma";
+import { operationalLog, safeLogRef } from "@/lib/operational-log";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -22,5 +23,6 @@ export async function POST(request: Request) {
   const created = await createDirectConversationAndQueue(accountId, user.id, phone, body);
   if (!created) return NextResponse.json({ error: "Número de teléfono inválido" }, { status: 400 });
   await prisma.auditLog.create({ data: { accountId, userId: user.id, action: "OUTBOUND_DIRECT_REQUESTED", entity: "OutboundMessageRequest", entityId: created.request.id } });
+  operationalLog("outbound.queued", { account: safeLogRef(accountId), request: safeLogRef(created.request.id), source: "direct" });
   return NextResponse.json({ conversationId: created.conversation.id, requestId: created.request.id, status: created.request.status }, { status: 201 });
 }
