@@ -15,6 +15,7 @@ import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/medi
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
 import { applyHistoryRecoveryPage, claimHistoryRecovery, failHistoryRecovery, requestHistoryPage } from "./lib/whatsapp/history-recovery";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
+import { getOutboundMessageForRetry } from "./lib/whatsapp/message-retry";
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
 let stopping = false;
@@ -29,6 +30,16 @@ const baileysLogger = { info() {}, warn() {}, error() {}, debug() {}, trace() {}
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
 function accountLogRef(accountId: string) { return safeLogRef(accountId); }
 function destinationKind(jid: string) { return jid.endsWith("@lid") ? "lid" : jid.endsWith("@s.whatsapp.net") ? "phone" : jid.endsWith("@g.us") ? "group" : "unknown"; }
+async function getMessageForRetry(accountId: string, externalId: string | null | undefined) {
+  try {
+    const message = await getOutboundMessageForRetry(accountId, externalId);
+    operationalLog(message ? "outbound.retry_source_found" : "outbound.retry_source_missing", { account: accountLogRef(accountId), message: externalId ? safeLogRef(externalId) : null });
+    return message;
+  } catch (error) {
+    operationalLog("outbound.retry_source_failed", { account: accountLogRef(accountId), message: externalId ? safeLogRef(externalId) : null, ...safeErrorInfo(error) }, "error");
+    return undefined;
+  }
+}
 
 async function isAccountActive(accountId: string) {
   return Boolean(await prisma.whatsAppAccount.findFirst({ where: { id: accountId, isActive: true }, select: { id: true } }));
@@ -36,9 +47,10 @@ async function isAccountActive(accountId: string) {
 
 function enqueueAccountWork(accountId: string, work: () => Promise<void>) {
   const previous = accountQueues.get(accountId) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(work).catch(() => undefined);
-  accountQueues.set(accountId, next);
-  return next;
+  const queued = previous.catch(() => undefined).then(work);
+  const guarded = queued.catch((error) => operationalLog("account_queue.failed", { account: accountLogRef(accountId), ...safeErrorInfo(error) }, "error"));
+  accountQueues.set(accountId, guarded);
+  return guarded;
 }
 
 async function connect(accountId: string) {
@@ -63,6 +75,7 @@ async function connect(accountId: string) {
       // otherwise leave a Railway worker busy after it has opened its socket.
       fireInitQueries: false,
       markOnlineOnConnect: false,
+      getMessage: async (key) => getMessageForRetry(accountId, key.id),
     });
     socket = activeSocket;
     sockets.set(accountId, activeSocket);
@@ -70,7 +83,24 @@ async function connect(accountId: string) {
     activeSocket.ev.on("creds.update", saveCreds);
     activeSocket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
     activeSocket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
-    activeSocket.ev.on("messages.upsert", ({ messages, type }) => { if (type === "notify") void enqueueAccountWork(accountId, async () => { for (const raw of messages) { const message = normalizeWhatsAppMessage(raw); if (message) { const persisted = await persistMessage(accountId, message); if (persisted.mediaAttachment) void processMediaAttachment(accountId, persisted.mediaAttachment.id, activeSocket, raw); if (message.conversationType === "DIRECT") void refreshContactProfilePicture(accountId, activeSocket, message.phoneJid ?? message.conversationJid); } } }); });
+    activeSocket.ev.on("messages.upsert", ({ messages, type }) => {
+      if (type !== "notify") return;
+      void enqueueAccountWork(accountId, async () => {
+        for (const raw of messages) {
+          const message = normalizeWhatsAppMessage(raw);
+          const messageRef = raw.key.id ? safeLogRef(raw.key.id) : null;
+          if (!message) {
+            operationalLog("inbound.ignored", { account: accountLogRef(accountId), message: messageRef });
+            continue;
+          }
+          operationalLog("inbound.received", { account: accountLogRef(accountId), message: messageRef, type: message.messageType, direction: message.direction });
+          const persisted = await persistMessage(accountId, message);
+          operationalLog("inbound.persisted", { account: accountLogRef(accountId), message: messageRef, created: persisted.created });
+          if (persisted.mediaAttachment) void processMediaAttachment(accountId, persisted.mediaAttachment.id, activeSocket, raw);
+          if (message.conversationType === "DIRECT") void refreshContactProfilePicture(accountId, activeSocket, message.phoneJid ?? message.conversationJid);
+        }
+      });
+    });
     activeSocket.ev.on("messaging-history.set", ({ messages, peerDataRequestSessionId }) => void enqueueAccountWork(accountId, () => applyHistoryRecoveryPage(accountId, peerDataRequestSessionId, messages)));
     activeSocket.ev.on("messages.update", (updates) => {
       for (const update of updates) {
