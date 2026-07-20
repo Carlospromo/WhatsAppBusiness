@@ -18,7 +18,7 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/scripts ./scripts
-COPY --from=builder /app/worker.mts ./worker.mts
+COPY --from=builder /app/worker.ts ./worker.ts
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 RUN chmod +x ./scripts/start.sh
