@@ -22,3 +22,19 @@ export async function failOutboundRequest(request: NonNullable<Awaited<ReturnTyp
     prisma.auditLog.create({ data: { accountId: request.accountId, userId: request.requestedById, action: "OUTBOUND_FAILED", entity: "OutboundMessageRequest", entityId: request.id } }),
   ]);
 }
+
+/**
+ * Baileys may report a delivery rejection after sendMessage has returned.
+ * Keep only a generic result: raw WhatsApp error codes can identify a device.
+ */
+export async function failOutboundDelivery(accountId: string, externalId: string) {
+  const request = await prisma.outboundMessageRequest.findFirst({
+    where: { accountId, externalId, status: OutboundMessageStatus.SENT },
+    select: { id: true, requestedById: true },
+  });
+  if (!request) return;
+  await prisma.$transaction([
+    prisma.outboundMessageRequest.update({ where: { id: request.id }, data: { status: OutboundMessageStatus.FAILED, safeError: "WhatsApp no pudo entregar el mensaje." } }),
+    prisma.auditLog.create({ data: { accountId, userId: request.requestedById, action: "OUTBOUND_DELIVERY_FAILED", entity: "OutboundMessageRequest", entityId: request.id } }),
+  ]);
+}
