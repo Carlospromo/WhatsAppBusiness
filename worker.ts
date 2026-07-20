@@ -20,8 +20,36 @@ const sockets = new Map<string, Awaited<ReturnType<typeof makeWASocket>>>();
 const connecting = new Set<string>();
 const resettingAuth = new Set<string>();
 const accountQueues = new Map<string, Promise<void>>();
+const reconnectAttempts = new Map<string, number>();
+const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
+
+function resetReconnectDelay(accountId: string) {
+  reconnectAttempts.delete(accountId);
+  const timer = reconnectTimers.get(accountId);
+  if (timer) clearTimeout(timer);
+  reconnectTimers.delete(accountId);
+}
+
+/**
+ * This is connection-level jitter, not a messaging delay. It prevents a
+ * temporary network outage from making every account reconnect simultaneously.
+ */
+function scheduleReconnect(accountId: string) {
+  if (stopping || reconnectTimers.has(accountId)) return;
+  const attempt = Math.min(reconnectAttempts.get(accountId) ?? 0, 6);
+  const baseDelayMs = Math.min(5_000 * 2 ** attempt, 60_000);
+  const spreadMs = Math.round(baseDelayMs * 0.2);
+  const delayMs = baseDelayMs - spreadMs + Math.floor(Math.random() * (spreadMs * 2 + 1));
+  reconnectAttempts.set(accountId, attempt + 1);
+  operationalLog("connection.reconnect_scheduled", { account: safeLogRef(accountId), attempt: attempt + 1, delayMs }, "debug");
+  const timer = setTimeout(() => {
+    reconnectTimers.delete(accountId);
+    void connect(accountId);
+  }, delayMs);
+  reconnectTimers.set(accountId, timer);
+}
 
 async function isAccountActive(accountId: string) {
   return Boolean(await prisma.whatsAppAccount.findFirst({ where: { id: accountId, isActive: true }, select: { id: true } }));
@@ -35,7 +63,7 @@ function enqueueAccountWork(accountId: string, work: () => Promise<void>) {
 }
 
 async function connect(accountId: string) {
-  if (stopping || connecting.has(accountId) || sockets.has(accountId)) return;
+  if (stopping || connecting.has(accountId) || sockets.has(accountId) || reconnectTimers.has(accountId)) return;
   if (!(await isAccountActive(accountId))) return;
   connecting.add(accountId);
   let socket: Awaited<ReturnType<typeof makeWASocket>> | undefined;
@@ -72,15 +100,15 @@ async function connect(accountId: string) {
     activeSocket.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
       if (sockets.get(accountId) !== activeSocket) return;
       if (qr) { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
-      if (connection === "open") { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } const jid = activeSocket.user?.id ?? null; await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null }); await auditConnection(accountId, "WHATSAPP_CONNECTED"); void enqueueAccountWork(accountId, async () => { await refreshRecentContactProfilePictures(accountId, activeSocket); await recoverPendingMedia(accountId, activeSocket); }); }
-      if (connection === "close") { sockets.delete(accountId); if (stopping || !(await isAccountActive(accountId))) return; const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode; if (code === DisconnectReason.loggedOut) { await updateConnection(accountId, { status: WhatsAppConnectionStatus.DISCONNECTED, qrCode: null, qrExpiresAt: null, lastError: "Sesión desvinculada." }); await auditConnection(accountId, "WHATSAPP_DISCONNECTED"); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "Conexión interrumpida; reintentando." }); await auditConnection(accountId, "WHATSAPP_CONNECTION_ERROR"); setTimeout(() => void connect(accountId), 5_000); }
+      if (connection === "open") { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } resetReconnectDelay(accountId); const jid = activeSocket.user?.id ?? null; await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null }); await auditConnection(accountId, "WHATSAPP_CONNECTED"); void enqueueAccountWork(accountId, async () => { await refreshRecentContactProfilePictures(accountId, activeSocket); await recoverPendingMedia(accountId, activeSocket); }); }
+      if (connection === "close") { sockets.delete(accountId); if (stopping || !(await isAccountActive(accountId))) return; const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode; if (code === DisconnectReason.loggedOut) { resetReconnectDelay(accountId); await updateConnection(accountId, { status: WhatsAppConnectionStatus.DISCONNECTED, qrCode: null, qrExpiresAt: null, lastError: "Sesión desvinculada." }); await auditConnection(accountId, "WHATSAPP_DISCONNECTED"); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "Conexión interrumpida; reintentando." }); await auditConnection(accountId, "WHATSAPP_CONNECTION_ERROR"); scheduleReconnect(accountId); }
     });
   } catch {
     if (socket && sockets.get(accountId) === socket) sockets.delete(accountId);
     if (!stopping && await isAccountActive(accountId)) {
       await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "No se pudo iniciar la conexión; se reintentará." });
       await auditConnection(accountId, "WHATSAPP_CONNECTION_ERROR");
-      setTimeout(() => void connect(accountId), 5_000);
+      scheduleReconnect(accountId);
     }
   } finally { connecting.delete(accountId); }
 }
@@ -162,5 +190,5 @@ const accountsTimer = setInterval(() => void syncAccounts(), 5_000);
 const outboundTimer = setInterval(() => void processOutbound(), 1_500);
 const mediaTimer = setInterval(() => void processPendingMedia(), 10_000);
 const readReceiptTimer = setInterval(() => void processReadReceipts(), 2_000);
-async function shutdown() { stopping = true; clearInterval(accountsTimer); clearInterval(outboundTimer); clearInterval(mediaTimer); clearInterval(readReceiptTimer); for (const socket of sockets.values()) try { await socket.end(undefined); } catch { /* ignore */ } await prisma.$disconnect(); process.exit(0); }
+async function shutdown() { stopping = true; clearInterval(accountsTimer); clearInterval(outboundTimer); clearInterval(mediaTimer); clearInterval(readReceiptTimer); for (const timer of reconnectTimers.values()) clearTimeout(timer); reconnectTimers.clear(); for (const socket of sockets.values()) try { await socket.end(undefined); } catch { /* ignore */ } await prisma.$disconnect(); process.exit(0); }
 process.once("SIGTERM", shutdown); process.once("SIGINT", shutdown);
