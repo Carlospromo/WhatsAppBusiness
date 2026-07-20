@@ -11,7 +11,7 @@ export async function upsertContact(accountId: string, contact: { jid: string; d
   await reconcileWhatsAppContact(accountId, { ...contact, origin: AddressBookContactOrigin.WHATSAPP_SYNC });
 }
 
-export async function persistMessage(accountId: string, message: NormalizedMessage, options: { includeMedia?: boolean } = {}) {
+export async function persistMessage(accountId: string, message: NormalizedMessage) {
   const contact = message.conversationType === "DIRECT"
     ? await reconcileWhatsAppContact(accountId, { jid: message.conversationJid, phoneJid: message.phoneJid, origin: message.direction === "INBOUND" ? AddressBookContactOrigin.EXTERNAL : AddressBookContactOrigin.WHATSAPP_SYNC })
     : null;
@@ -39,7 +39,7 @@ export async function persistMessage(accountId: string, message: NormalizedMessa
         },
       });
       const savedMessage = await transaction.message.create({ data: messageRecordData(accountId, conversation.id, message) });
-      const mediaAttachment = options.includeMedia !== false && message.media
+      const mediaAttachment = message.media
         ? await transaction.mediaAttachment.create({
           data: {
             accountId,
