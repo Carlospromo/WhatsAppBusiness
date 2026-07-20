@@ -14,9 +14,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm install
+      - run: npm ci
       - run: npx prisma generate
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - run: npm run worker:build
+      - run: npm run worker:verify
+      - run: docker build -t whatsapp-business-ci .
+      - run: docker run --rm --entrypoint node whatsapp-business-ci /app/scripts/verify-worker-esm.mjs

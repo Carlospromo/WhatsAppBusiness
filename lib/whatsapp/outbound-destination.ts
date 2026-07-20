@@ -4,6 +4,14 @@ type OutboundConversation = {
   contact?: { phone: string | null } | null;
 };
 
+export type OutboundDestinationKind = "pn" | "lid" | "group" | "unknown";
+
+export type OutboundDestination = {
+  jid: string | null;
+  kind: OutboundDestinationKind;
+  phoneFallbackPresent: boolean;
+};
+
 /**
  * Baileys understands both phone-number JIDs and LIDs. For an existing
  * conversation, preserve the exact direct-chat identity received from
@@ -17,4 +25,21 @@ export function outboundDestinationJid(conversation: OutboundConversation) {
   const phone = conversation.contact?.phone;
   if (phone && /^\+[1-9]\d{6,14}$/.test(phone)) return `${phone.slice(1)}@s.whatsapp.net`;
   return null;
+}
+
+/**
+ * Keep diagnostics useful without exposing the technical destination. A
+ * stored phone is only a legacy fallback, never a replacement for an LID.
+ */
+export function resolveOutboundDestination(conversation: OutboundConversation): OutboundDestination {
+  const jid = outboundDestinationJid(conversation);
+  const kind: OutboundDestinationKind = !jid ? "unknown"
+    : jid.endsWith("@g.us") ? "group"
+      : jid.endsWith("@lid") ? "lid"
+        : "pn";
+  return {
+    jid,
+    kind,
+    phoneFallbackPresent: Boolean(conversation.contact?.phone && /^\+[1-9]\d{6,14}$/.test(conversation.contact.phone)),
+  };
 }
