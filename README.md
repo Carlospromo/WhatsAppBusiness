@@ -122,6 +122,8 @@ Desde `/dashboard/administracion/cuentas` se crea una cuenta indicando un nombre
 
 Para vincular un número, abre **Vinculación**, selecciona la cuenta y pulsa **Solicitar vinculación**. Cuando aparezca el QR, en el teléfono abre WhatsApp, ve a **Dispositivos vinculados** y escanéalo. El QR solo se sirve a administradores autenticados, no se incorpora a URLs públicas ni se escribe en los registros de la aplicación.
 
+Si una sesión queda desvinculada, un administrador puede solicitar una **nueva vinculación**. Esta acción reinicia únicamente las credenciales persistentes de esa cuenta y pide un nuevo escaneo; una desconexión transitoria no borra por sí misma ninguna sesión.
+
 ## Fase 8: medios entrantes privados
 
 La aplicación guarda únicamente los medios **nuevos** recibidos tras desplegar esta fase: imágenes, audios o notas de voz y vídeos. Los medios se descargan desde el worker de WhatsApp y se muestran en el hilo correspondiente. Una imagen puede verse en línea; audios y vídeos usan los controles nativos del navegador. Nunca se reproducen automáticamente.

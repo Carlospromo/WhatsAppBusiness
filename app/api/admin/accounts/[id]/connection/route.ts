@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -20,7 +21,10 @@ export async function POST(_: Request, { params }: { params: Promise<{ id: strin
   if (account.connection?.status === "WAITING_FOR_QR" && account.connection.qrExpiresAt && account.connection.qrExpiresAt > new Date()) {
     return NextResponse.json({ ok: true, reusedQr: true });
   }
-  await prisma.whatsAppConnection.upsert({ where: { accountId: id }, create: { accountId: id, status: "DISCONNECTED" }, update: { status: "DISCONNECTED", qrCode: null, qrExpiresAt: null, lastError: null } });
+  // This is an explicit administrator request. The worker consumes this opaque
+  // marker and only then clears this account's persisted Baileys credentials.
+  const relinkRequestId = randomUUID();
+  await prisma.whatsAppConnection.upsert({ where: { accountId: id }, create: { accountId: id, status: "DISCONNECTED", relinkRequestId }, update: { status: "DISCONNECTED", qrCode: null, qrExpiresAt: null, lastError: null, relinkRequestId } });
   await prisma.auditLog.create({ data: { userId: user.id, accountId: id, action: "WHATSAPP_LINK_REQUESTED", entity: "WhatsAppConnection", entityId: id } });
   return NextResponse.json({ ok: true });
 }

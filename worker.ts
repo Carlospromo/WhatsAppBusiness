@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/rules-of-hooks -- Baileys exports a state helper; this is a Node worker. */
 /* WhatsApp worker: every account owns an isolated socket and auth directory. */
 import "dotenv/config";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState } from "@whiskeysockets/baileys";
 import { WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "./lib/prisma";
@@ -17,6 +17,7 @@ const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
 let stopping = false;
 const sockets = new Map<string, Awaited<ReturnType<typeof makeWASocket>>>();
 const connecting = new Set<string>();
+const resettingAuth = new Set<string>();
 const accountQueues = new Map<string, Promise<void>>();
 
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
@@ -66,9 +67,10 @@ async function connect(accountId: string) {
 }
 
 async function syncAccounts() {
-  const accounts = await prisma.whatsAppAccount.findMany({ where: { isActive: true }, select: { id: true, connection: { select: { status: true } } } });
+  const accounts = await prisma.whatsAppAccount.findMany({ where: { isActive: true }, select: { id: true, connection: { select: { status: true, relinkRequestId: true } } } });
   const allowed = new Set(accounts.map((account) => account.id));
   for (const account of accounts) {
+    await resetAuthForExplicitRelink(account.id, account.connection?.relinkRequestId);
     const socket = sockets.get(account.id);
     if (socket && account.connection?.status === WhatsAppConnectionStatus.DISCONNECTED) {
       sockets.delete(account.id);
@@ -85,6 +87,28 @@ async function processOutbound() {
     const request = await claimNextOutboundRequest(accountId);
     if (!request) continue;
     try { const sent = await socket.sendMessage(request.conversation.jid, { text: request.body }); const externalId = sent?.key.id; if (!externalId) throw new Error("missing message id"); await completeOutboundRequest(request, externalId); if (request.conversation.type === "DIRECT") try { await refreshContactProfilePicture(accountId, socket, request.conversation.jid); } catch { /* A profile picture must never change the outcome of an already sent message. */ } } catch { await failOutboundRequest(request.id); }
+  }
+}
+
+async function resetAuthForExplicitRelink(accountId: string, requestId: string | null | undefined) {
+  if (!requestId || resettingAuth.has(accountId)) return false;
+  resettingAuth.add(accountId);
+  try {
+    const socket = sockets.get(accountId);
+    if (socket) {
+      sockets.delete(accountId);
+      try { await socket.end(undefined); } catch { /* already closed */ }
+    }
+    // Credentials are removed only after an authenticated administrator has
+    // requested a new link. Other disconnects continue to preserve them.
+    await rm(authPath(accountId), { recursive: true, force: true });
+    const consumed = await prisma.whatsAppConnection.updateMany({
+      where: { accountId, relinkRequestId: requestId },
+      data: { relinkRequestId: null },
+    });
+    return consumed.count > 0;
+  } finally {
+    resettingAuth.delete(accountId);
   }
 }
 
