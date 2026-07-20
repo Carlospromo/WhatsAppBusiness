@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DirectMessageComposer } from "./direct-message-composer";
 import { MessageComposer } from "./message-composer";
+import { HistoryRecovery } from "./history-recovery";
 
 type Role = "ADMIN" | "AGENT" | "VIEWER";
 type Account = { id: string; name: string; slug: string; isActive: boolean };
@@ -278,6 +279,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
               <button type="button" onClick={closeConversation} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 md:hidden" aria-label="Volver a conversaciones">←</button>
               <ConversationAvatar contact={selectedConversation.contact} name={selectedName} />
               <div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-slate-900">{selectedName}</h2><p className="truncate text-xs text-slate-500">{selectedConversation.account.name}{selectedPhone && selectedPhone !== selectedName ? ` · ${selectedPhone}` : ""}{hasExternalContact ? " · Contacto externo" : ""}</p></div>
+              <HistoryRecovery conversationId={selectedConversation.id} enabled={role === "ADMIN" && connectionStatuses[selectedConversation.accountId] === "CONNECTED"}/>
               {hasExternalContact && <span className="hidden rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800 sm:inline">Externo</span>}
             </header>}
             <div className="min-h-0 flex-1 overflow-y-scroll bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef5f2)] px-3 py-4 [scrollbar-gutter:stable] sm:px-6">

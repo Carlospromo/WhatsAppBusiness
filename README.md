@@ -165,3 +165,9 @@ Al abrir una conversación, un `ADMIN` o `AGENT` marca sus mensajes entrantes co
 No se crean solicitudes al listar, buscar o actualizar conversaciones en segundo plano; solo al abrir un hilo que todavía tiene mensajes sin leer. Si una cuenta está desconectada, la solicitud queda pendiente y se reintenta al recuperar la conexión. Los reintentos agotados se registran con un error seguro y sin contenido de mensajes ni identificadores técnicos.
 
 WhatsApp aplica finalmente la configuración de privacidad de recibos de lectura del teléfono vinculado. Mantén una sola réplica Railway para que el worker y su cola persistente sigan teniendo un único consumidor.
+
+## Recuperación manual de historial reciente
+
+Un `ADMIN` puede abrir una conversación y usar **Recuperar historial reciente** para solicitar un rango de hasta 31 días. La petición se procesa en el worker Baileys, en páginas de hasta 50 mensajes, y solo usa un mensaje local posterior como ancla. Por ello depende de que WhatsApp conserve esos datos y de que exista esa ancla; no es una copia de seguridad ni garantiza recuperar todos los mensajes perdidos.
+
+Cada mensaje recuperado pasa por la misma deduplicación por cuenta e identificador externo que los mensajes en tiempo real. Los registros ya existentes no se duplican. Esta recuperación guarda únicamente mensajes textuales y pies de foto; no descarga medios históricos.

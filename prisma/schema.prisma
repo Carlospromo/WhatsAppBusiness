@@ -45,6 +45,13 @@ enum ReadReceiptStatus {
   FAILED
 }
 
+enum HistoryRecoveryStatus {
+  PENDING
+  WAITING
+  COMPLETED
+  FAILED
+}
+
 enum MediaAttachmentKind {
   IMAGE
   AUDIO
@@ -98,6 +105,7 @@ model User {
   auditLogs             AuditLog[]
   outboundRequests      OutboundMessageRequest[]
   readReceiptRequests   ReadReceiptRequest[]
+  historyRecoveryRequests HistoryRecoveryRequest[]
   assignedConversations Conversation[]              @relation("ConversationAssignee")
   notes                 ConversationNote[]
   accountMemberships    WhatsAppAccountMembership[]
@@ -135,6 +143,7 @@ model WhatsAppAccount {
   mediaAttachments    MediaAttachment[]
   outboundRequests    OutboundMessageRequest[]
   readReceiptRequests ReadReceiptRequest[]
+  historyRecoveryRequests HistoryRecoveryRequest[]
   tags                ConversationTag[]
   memberships         WhatsAppAccountMembership[]
   auditLogs           AuditLog[]
@@ -300,6 +309,7 @@ model Conversation {
   messages           Message[]
   outboundRequests   OutboundMessageRequest[]
   readReceiptRequests ReadReceiptRequest[]
+  historyRecoveryRequests HistoryRecoveryRequest[]
   notes              ConversationNote[]
   tags               ConversationTag[]
   createdAt          DateTime                 @default(now())
@@ -362,6 +372,37 @@ model ReadReceiptMessage {
   message   Message            @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@id([requestId, messageId])
+}
+
+model HistoryRecoveryRequest {
+  id                String                @id @default(cuid())
+  accountId         String
+  conversationId    String
+  requestedById     String
+  fromAt            DateTime
+  toAt              DateTime
+  status            HistoryRecoveryStatus @default(PENDING)
+  anchorExternalId  String
+  anchorSentAt      DateTime
+  anchorFromMe      Boolean               @default(false)
+  baileysRequestId  String?
+  pageCount         Int                   @default(0)
+  receivedCount     Int                   @default(0)
+  importedCount     Int                   @default(0)
+  duplicateCount    Int                   @default(0)
+  attemptCount      Int                   @default(0)
+  lastAttemptAt     DateTime?
+  safeError         String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  completedAt       DateTime?
+  account           WhatsAppAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation      Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  requestedBy       User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([accountId, status, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([baileysRequestId])
 }
 
 model MediaAttachment {
