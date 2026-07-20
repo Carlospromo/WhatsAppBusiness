@@ -7,10 +7,10 @@ export { validRecoveryRange } from "../history-recovery";
 
 const PAGE_SIZE = 50;
 const MAX_PAGES = 20;
-const MAX_ATTEMPTS = 3;
-
 export async function claimHistoryRecovery(accountId: string) {
-  await prisma.historyRecoveryRequest.updateMany({ where: { accountId, status: HistoryRecoveryStatus.WAITING, lastAttemptAt: { lt: new Date(Date.now() - 45_000) } }, data: { status: HistoryRecoveryStatus.PENDING, baileysRequestId: null, safeError: "Pendiente de reintento." } });
+  // History retrieval is explicitly initiated by an administrator. Do not
+  // endlessly re-send an on-demand sync if WhatsApp never answers it.
+  await prisma.historyRecoveryRequest.updateMany({ where: { accountId, status: HistoryRecoveryStatus.WAITING, lastAttemptAt: { lt: new Date(Date.now() - 45_000) } }, data: { status: HistoryRecoveryStatus.FAILED, baileysRequestId: null, safeError: "WhatsApp no devolvió el historial solicitado. Puedes intentarlo de nuevo más tarde." } });
   const request = await prisma.historyRecoveryRequest.findFirst({ where: { accountId, status: HistoryRecoveryStatus.PENDING }, orderBy: { createdAt: "asc" }, include: { conversation: { select: { jid: true } } } });
   if (!request) return null;
   const claimed = await prisma.historyRecoveryRequest.updateMany({ where: { id: request.id, status: HistoryRecoveryStatus.PENDING }, data: { status: HistoryRecoveryStatus.WAITING, attemptCount: { increment: 1 }, lastAttemptAt: new Date(), safeError: null } });
@@ -19,15 +19,14 @@ export async function claimHistoryRecovery(accountId: string) {
 
 export async function requestHistoryPage(socket: WASocket, request: NonNullable<Awaited<ReturnType<typeof claimHistoryRecovery>>>) {
   const key: WAMessageKey = { remoteJid: request.conversation.jid, id: request.anchorExternalId, fromMe: request.anchorFromMe };
-  const requestId = await socket.fetchMessageHistory(PAGE_SIZE, key, Math.floor(request.anchorSentAt.getTime() / 1000));
+  const requestId = await socket.fetchMessageHistory(PAGE_SIZE, key, request.anchorSentAt.getTime());
   await prisma.historyRecoveryRequest.update({ where: { id: request.id }, data: { baileysRequestId: requestId } });
 }
 
 export async function failHistoryRecovery(request: NonNullable<Awaited<ReturnType<typeof claimHistoryRecovery>>>) {
-  const failed = request.attemptCount + 1 >= MAX_ATTEMPTS;
   await prisma.$transaction([
-    prisma.historyRecoveryRequest.update({ where: { id: request.id }, data: { status: failed ? HistoryRecoveryStatus.FAILED : HistoryRecoveryStatus.PENDING, baileysRequestId: null, safeError: "No se pudo recuperar el historial solicitado." } }),
-    ...(failed ? [prisma.auditLog.create({ data: { accountId: request.accountId, userId: request.requestedById, action: "HISTORY_RECOVERY_FAILED", entity: "HistoryRecoveryRequest", entityId: request.id } })] : []),
+    prisma.historyRecoveryRequest.update({ where: { id: request.id }, data: { status: HistoryRecoveryStatus.FAILED, baileysRequestId: null, safeError: "No se pudo recuperar el historial solicitado." } }),
+    prisma.auditLog.create({ data: { accountId: request.accountId, userId: request.requestedById, action: "HISTORY_RECOVERY_FAILED", entity: "HistoryRecoveryRequest", entityId: request.id } }),
   ]);
 }
 
