@@ -23,7 +23,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1090.0",
     "@prisma/client": "^6.16.0",
     "@types/better-sqlite3": "^7.6.13",
-    "@whiskeysockets/baileys": "^6.7.16",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
     "argon2": "^0.44.0",
     "better-sqlite3": "^12.4.1",
     "concurrently": "^10.0.3",

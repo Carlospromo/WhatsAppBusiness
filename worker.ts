@@ -30,6 +30,17 @@ const baileysLogger = { info() {}, warn() {}, error() {}, debug() {}, trace() {}
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
 function accountLogRef(accountId: string) { return safeLogRef(accountId); }
 function destinationKind(jid: string) { return jid.endsWith("@lid") ? "lid" : jid.endsWith("@s.whatsapp.net") ? "phone" : jid.endsWith("@g.us") ? "group" : "unknown"; }
+function outboundStatus(status: number | null | undefined) {
+  switch (status) {
+    case WAMessageStatus.PENDING: return "pending";
+    case WAMessageStatus.SERVER_ACK: return "server_ack";
+    case WAMessageStatus.DELIVERY_ACK: return "delivery_ack";
+    case WAMessageStatus.READ: return "read";
+    case WAMessageStatus.PLAYED: return "played";
+    case WAMessageStatus.ERROR: return "error";
+    default: return "unknown";
+  }
+}
 async function getMessageForRetry(accountId: string, externalId: string | null | undefined) {
   try {
     const message = await getOutboundMessageForRetry(accountId, externalId);
@@ -105,6 +116,16 @@ async function connect(accountId: string) {
     activeSocket.ev.on("messages.update", (updates) => {
       for (const update of updates) {
         const externalId = update.key.id;
+        if (update.key.fromMe && externalId && update.update.status !== undefined) {
+          // sendMessage returning is only the local relay acknowledgement.
+          // This later event identifies the server/delivery result without
+          // disclosing the destination, message text or WhatsApp identifiers.
+          operationalLog("outbound.status_updated", {
+            account: accountLogRef(accountId),
+            message: safeLogRef(externalId),
+            status: outboundStatus(update.update.status),
+          });
+        }
         if (update.key.fromMe && externalId && update.update.status === WAMessageStatus.ERROR) {
           operationalLog("outbound.delivery_rejected", { account: accountLogRef(accountId), message: safeLogRef(externalId) }, "error");
           void failOutboundDelivery(accountId, externalId).catch((error) => operationalLog("outbound.delivery_rejection_persist_failed", { account: accountLogRef(accountId), message: safeLogRef(externalId), ...safeErrorInfo(error) }, "error"));
