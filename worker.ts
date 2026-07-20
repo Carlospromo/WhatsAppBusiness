@@ -14,6 +14,7 @@ import { outboundDestinationJid } from "./lib/whatsapp/outbound-destination";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
 import { applyHistoryRecoveryPage, claimHistoryRecovery, failHistoryRecovery, requestHistoryPage } from "./lib/whatsapp/history-recovery";
+import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
 let stopping = false;
@@ -22,9 +23,12 @@ const connecting = new Set<string>();
 const connectedAccounts = new Set<string>();
 const resettingAuth = new Set<string>();
 const accountQueues = new Map<string, Promise<void>>();
+const lastBlockedOutboundLogAt = new Map<string, number>();
 const baileysLogger = { info() {}, warn() {}, error() {}, debug() {}, trace() {}, child() { return baileysLogger; } } as never;
 
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
+function accountLogRef(accountId: string) { return safeLogRef(accountId); }
+function destinationKind(jid: string) { return jid.endsWith("@lid") ? "lid" : jid.endsWith("@s.whatsapp.net") ? "phone" : jid.endsWith("@g.us") ? "group" : "unknown"; }
 
 async function isAccountActive(accountId: string) {
   return Boolean(await prisma.whatsAppAccount.findFirst({ where: { id: accountId, isActive: true }, select: { id: true } }));
@@ -40,6 +44,7 @@ function enqueueAccountWork(accountId: string, work: () => Promise<void>) {
 async function connect(accountId: string) {
   if (stopping || connecting.has(accountId) || sockets.has(accountId)) return;
   if (!(await isAccountActive(accountId))) return;
+  operationalLog("connection.connecting", { account: accountLogRef(accountId) });
   connecting.add(accountId);
   let socket: Awaited<ReturnType<typeof makeWASocket>> | undefined;
   try {
@@ -61,6 +66,7 @@ async function connect(accountId: string) {
     });
     socket = activeSocket;
     sockets.set(accountId, activeSocket);
+    operationalLog("connection.socket_created", { account: accountLogRef(accountId) });
     activeSocket.ev.on("creds.update", saveCreds);
     activeSocket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
     activeSocket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
@@ -69,12 +75,15 @@ async function connect(accountId: string) {
     activeSocket.ev.on("messages.update", (updates) => {
       for (const update of updates) {
         const externalId = update.key.id;
-        if (update.key.fromMe && externalId && update.update.status === WAMessageStatus.ERROR) void failOutboundDelivery(accountId, externalId);
+        if (update.key.fromMe && externalId && update.update.status === WAMessageStatus.ERROR) {
+          operationalLog("outbound.delivery_rejected", { account: accountLogRef(accountId), message: safeLogRef(externalId) }, "error");
+          void failOutboundDelivery(accountId, externalId).catch((error) => operationalLog("outbound.delivery_rejection_persist_failed", { account: accountLogRef(accountId), message: safeLogRef(externalId), ...safeErrorInfo(error) }, "error"));
+        }
       }
     });
     activeSocket.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
       if (sockets.get(accountId) !== activeSocket) return;
-      if (qr) { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
+      if (qr) { operationalLog("connection.qr_available", { account: accountLogRef(accountId) }); if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
       if (connection === "open") {
         if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; }
         const jid = activeSocket.user?.id ?? null;
@@ -82,6 +91,7 @@ async function connect(accountId: string) {
         // socket.user is populated from saved credentials before the WebSocket
         // has opened, so only this event makes an account eligible to send.
         connectedAccounts.add(accountId);
+        operationalLog("connection.open", { account: accountLogRef(accountId) });
         await auditConnection(accountId, "WHATSAPP_CONNECTED");
         void refreshRecentContactProfilePictures(accountId, activeSocket);
         void recoverPendingMedia(accountId, activeSocket);
@@ -91,6 +101,7 @@ async function connect(accountId: string) {
         sockets.delete(accountId);
         if (stopping || !(await isAccountActive(accountId))) return;
         const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
+        operationalLog("connection.closed", { account: accountLogRef(accountId), statusCode: typeof code === "number" ? code : undefined }, "error");
         if (code === DisconnectReason.loggedOut) {
           await updateConnection(accountId, { status: WhatsAppConnectionStatus.DISCONNECTED, qrCode: null, qrExpiresAt: null, lastError: "Sesión desvinculada." });
           await auditConnection(accountId, "WHATSAPP_DISCONNECTED");
@@ -101,8 +112,9 @@ async function connect(accountId: string) {
         setTimeout(() => void connect(accountId), 5_000);
       }
     });
-  } catch {
+  } catch (error) {
     connectedAccounts.delete(accountId);
+    operationalLog("connection.start_failed", { account: accountLogRef(accountId), ...safeErrorInfo(error) }, "error");
     if (socket && sockets.get(accountId) === socket) sockets.delete(accountId);
     if (!stopping && await isAccountActive(accountId)) {
       await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "No se pudo iniciar la conexión; se reintentará." });
@@ -130,22 +142,38 @@ async function syncAccounts() {
 
 async function processOutbound() {
   for (const [accountId, socket] of sockets) {
-    if (!connectedAccounts.has(accountId)) continue;
-    const request = await claimNextOutboundRequest(accountId);
+    if (!connectedAccounts.has(accountId)) {
+      const now = Date.now();
+      if (now - (lastBlockedOutboundLogAt.get(accountId) ?? 0) >= 30_000) {
+        lastBlockedOutboundLogAt.set(accountId, now);
+        const waiting = await prisma.outboundMessageRequest.findFirst({ where: { accountId, status: "PENDING" }, select: { id: true } }).catch(() => null);
+        if (waiting) operationalLog("outbound.waiting_for_connection", { account: accountLogRef(accountId), request: safeLogRef(waiting.id) }, "debug");
+      }
+      continue;
+    }
+    let request: Awaited<ReturnType<typeof claimNextOutboundRequest>>;
+    try { request = await claimNextOutboundRequest(accountId); }
+    catch (error) { operationalLog("outbound.claim_failed", { account: accountLogRef(accountId), ...safeErrorInfo(error) }, "error"); continue; }
     if (!request) continue;
+    const requestRef = safeLogRef(request.id);
     const destinationJid = outboundDestinationJid(request.conversation);
     if (!destinationJid) {
-      await failOutboundRequest(request, "No se pudo determinar un número de WhatsApp válido para esta conversación.");
+      operationalLog("outbound.destination_unavailable", { account: accountLogRef(accountId), request: requestRef }, "error");
+      await failOutboundRequest(request, "No se pudo determinar un número de WhatsApp válido para esta conversación.").catch((error) => operationalLog("outbound.failure_persist_failed", { account: accountLogRef(accountId), request: requestRef, ...safeErrorInfo(error) }, "error"));
       continue;
     }
     try {
+      operationalLog("outbound.relay_started", { account: accountLogRef(accountId), request: requestRef, destination: destinationKind(destinationJid) });
       const sent = await socket.sendMessage(destinationJid, { text: request.body });
       const externalId = sent?.key.id;
       if (!externalId) throw new Error("missing message id");
+      operationalLog("outbound.relay_accepted", { account: accountLogRef(accountId), request: requestRef, message: safeLogRef(externalId), destination: destinationKind(destinationJid) });
       await completeOutboundRequest(request, externalId);
+      operationalLog("outbound.persisted", { account: accountLogRef(accountId), request: requestRef, message: safeLogRef(externalId) });
       if (request.conversation.type === "DIRECT") void refreshContactProfilePicture(accountId, socket, destinationJid);
-    } catch {
-      await failOutboundRequest(request);
+    } catch (error) {
+      operationalLog("outbound.relay_failed", { account: accountLogRef(accountId), request: requestRef, destination: destinationKind(destinationJid), ...safeErrorInfo(error) }, "error");
+      await failOutboundRequest(request).catch((failureError) => operationalLog("outbound.failure_persist_failed", { account: accountLogRef(accountId), request: requestRef, ...safeErrorInfo(failureError) }, "error"));
     }
   }
 }

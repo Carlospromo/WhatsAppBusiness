@@ -69,7 +69,7 @@ npm run build
 | `NODE_ENV` | `development` o `production`. |
 | `PORT` | Puerto proporcionado por Railway; la aplicación lo usa automáticamente. |
 | `WA_AUTH_DIR` | Ruta de la sesión vinculada. En Railway: `/data/wa-auth`. |
-| `LOG_LEVEL` | Nivel de log técnico; nunca registra mensajes, QR, números completos ni tokens. |
+| `LOG_LEVEL` | Nivel de log técnico. Con `info` se registran eventos operativos de conexión y salida; con `debug`, también esperas de cola. Nunca se registran mensajes, QR, números completos, JID, tokens ni URLs. |
 
 ## Despliegue en Railway
 
