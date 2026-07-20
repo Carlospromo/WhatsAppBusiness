@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { DirectMessageComposer } from "./direct-message-composer";
 import { MessageComposer } from "./message-composer";
 
 type Role = "ADMIN" | "AGENT" | "VIEWER";
@@ -103,6 +104,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [conversationError, setConversationError] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
+  const [directComposerOpen, setDirectComposerOpen] = useState(false);
   const canManage = role === "ADMIN" || role === "AGENT";
 
   const pageUrl = useCallback((changes: { account?: string | null; filter?: string; selected?: string | null } = {}) => {
@@ -171,6 +173,8 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   const selectedName = selectedConversation ? conversationName(selectedConversation) : "";
   const selectedPhone = selectedConversation?.contact?.phone ?? null;
   const sendingEnabled = Boolean(selectedConversation && canManage && connectionStatuses[selectedConversation.accountId] === "CONNECTED");
+  const selectedAccount = accounts.find((account) => account.id === accountId) ?? null;
+  const directMessageEnabled = Boolean(selectedAccount && canManage && connectionStatuses[selectedAccount.id] === "CONNECTED");
   const hasExternalContact = selectedConversation?.contact?.addressBookContact?.origin === "EXTERNAL";
   const filters = useMemo(() => [["all", "Todas"], ["unread", "No leídas"], ["direct", "Directas"], ["group", "Grupos"]], []);
 
@@ -228,6 +232,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Conversaciones</h1>
         </div>
         <div className="flex gap-2">
+          {canManage && <button type="button" onClick={() => setDirectComposerOpen(true)} disabled={!selectedAccount} className="rounded-full bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50" title={!selectedAccount ? "Selecciona una cuenta para iniciar un mensaje" : undefined}>Nuevo mensaje</button>}
           <Link href="/dashboard/agenda" className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:border-emerald-300 hover:text-emerald-700">Agenda</Link>
           <Link href="/dashboard/contactos" className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:border-emerald-300 hover:text-emerald-700">Contactos</Link>
         </div>
@@ -238,7 +243,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
         {accounts.map((account) => <Link key={account.id} href={pageUrl({ account: account.id, selected: null })} className={`whitespace-nowrap rounded-full px-3 py-1.5 ${accountId === account.id ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>{account.name}</Link>)}
       </nav>
 
-      <div className="grid min-h-[calc(100dvh-13rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:grid-cols-[22rem_minmax(0,1fr)]">
+      <div className="grid h-[calc(100dvh-10rem)] max-h-[46rem] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:grid-cols-[22rem_minmax(0,1fr)]">
         <aside className={`min-h-0 flex-col border-r border-slate-200 bg-white ${selectedId ? "hidden md:flex" : "flex"}`}>
           <form className="border-b border-slate-100 p-3">
             <input type="hidden" name="account" value={accountId || ""} />
@@ -249,7 +254,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
           <nav className="flex gap-1 overflow-x-auto border-b border-slate-100 p-2" aria-label="Filtros">
             {filters.map(([id, label]) => <Link key={id} href={pageUrl({ filter: id, selected: null })} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === id || (id === "all" && !filter) ? "bg-emerald-50 text-emerald-800" : "text-slate-500 hover:bg-slate-50"}`}>{label}</Link>)}
           </nav>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-scroll [scrollbar-gutter:stable]">
             {rows.length ? rows.map((conversation) => {
               const name = conversationName(conversation);
               const isSelected = conversation.id === selectedId;
@@ -275,7 +280,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
               <div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-slate-900">{selectedName}</h2><p className="truncate text-xs text-slate-500">{selectedConversation.account.name}{selectedPhone && selectedPhone !== selectedName ? ` · ${selectedPhone}` : ""}{hasExternalContact ? " · Contacto externo" : ""}</p></div>
               {hasExternalContact && <span className="hidden rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800 sm:inline">Externo</span>}
             </header>}
-            <div className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef5f2)] px-3 py-4 sm:px-6">
+            <div className="min-h-0 flex-1 overflow-y-scroll bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef5f2)] px-3 py-4 [scrollbar-gutter:stable] sm:px-6">
               {loadingConversation && <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>}
               {conversationError && <div className="mx-auto max-w-md rounded-xl border border-rose-200 bg-rose-50 p-4 text-center text-sm text-rose-800"><p>{conversationError}</p><button type="button" onClick={() => selectedId && void loadConversation(selectedId)} className="mt-2 font-medium underline">Reintentar</button></div>}
               {detail && <div className="mx-auto flex max-w-3xl flex-col gap-2">
@@ -302,6 +307,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
           </>}
         </section>
       </div>
+      {directComposerOpen && selectedAccount && <DirectMessageComposer accountId={selectedAccount.id} accountName={selectedAccount.name} enabled={directMessageEnabled} onClose={() => setDirectComposerOpen(false)} onQueued={(conversationId) => { setDirectComposerOpen(false); selectConversation(conversationId); }} />}
     </main>
   );
 }
