@@ -2,16 +2,17 @@
 /* WhatsApp worker: every account owns an isolated socket and auth directory. */
 import "dotenv/config";
 import { mkdir, rm } from "node:fs/promises";
-import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState } from "@whiskeysockets/baileys";
+import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, WAMessageStatus } from "@whiskeysockets/baileys";
 import { WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "./lib/prisma";
 import { auditConnection, updateConnection } from "./lib/whatsapp/connection";
 import { maskPhone, normalizeWhatsAppMessage } from "./lib/whatsapp/normalize";
 import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
-import { claimNextOutboundRequest, completeOutboundRequest, failOutboundRequest } from "./lib/whatsapp/outbound";
+import { claimNextOutboundRequest, completeOutboundRequest, failOutboundDelivery, failOutboundRequest } from "./lib/whatsapp/outbound";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
+import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
 let stopping = false;
@@ -43,13 +44,31 @@ async function connect(accountId: string) {
     await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTING, qrCode: null, qrExpiresAt: null, lastError: null });
     const { state, saveCreds } = await useMultiFileAuthState(authPath(accountId));
     const { version } = await fetchLatestBaileysVersion();
-    const activeSocket = makeWASocket({ version, auth: state, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false });
+    const activeSocket = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      syncFullHistory: false,
+      // The dashboard does not use WhatsApp properties, block lists or
+      // privacy settings. Skipping these optional queries avoids their
+      // one-minute timeout without affecting real-time messages or sending.
+      fireInitQueries: false,
+      markOnlineOnConnect: false,
+    });
     socket = activeSocket;
     sockets.set(accountId, activeSocket);
     activeSocket.ev.on("creds.update", saveCreds);
     activeSocket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
     activeSocket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
     activeSocket.ev.on("messages.upsert", ({ messages, type }) => { if (type === "notify") void enqueueAccountWork(accountId, async () => { for (const raw of messages) { const message = normalizeWhatsAppMessage(raw); if (message) { const persisted = await persistMessage(accountId, message); if (persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, activeSocket, raw); if (message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, activeSocket, message.conversationJid); } } }); });
+    activeSocket.ev.on("messages.update", (updates) => {
+      for (const update of updates) {
+        const externalId = update.key.id;
+        if (!update.key.fromMe || !externalId || update.update.status !== WAMessageStatus.ERROR) continue;
+        operationalLog("outbound.delivery_rejected", { account: safeLogRef(accountId), message: safeLogRef(externalId) }, "error");
+        void failOutboundDelivery(accountId, externalId).catch((error) => operationalLog("outbound.delivery_failure_persist_failed", { account: safeLogRef(accountId), message: safeLogRef(externalId), ...safeErrorInfo(error) }, "error"));
+      }
+    });
     activeSocket.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
       if (sockets.get(accountId) !== activeSocket) return;
       if (qr) { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }

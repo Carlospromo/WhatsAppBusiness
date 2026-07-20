@@ -13,3 +13,20 @@ export async function completeOutboundRequest(request: NonNullable<Awaited<Retur
   await prisma.$transaction([prisma.outboundMessageRequest.update({ where: { id: request.id }, data: { status: OutboundMessageStatus.SENT, externalId, sentAt: new Date(), safeError: null } }), prisma.auditLog.create({ data: { accountId: request.accountId, userId: request.requestedById, action: "OUTBOUND_SENT", entity: "OutboundMessageRequest", entityId: request.id } })]);
 }
 export async function failOutboundRequest(id: string) { await prisma.outboundMessageRequest.update({ where: { id }, data: { status: OutboundMessageStatus.FAILED, safeError: "No se pudo enviar el mensaje." } }); }
+
+/**
+ * A local relay acknowledgement does not guarantee that WhatsApp can deliver
+ * the encrypted message. Keep the request state truthful when Baileys later
+ * reports a delivery error; raw WhatsApp codes are deliberately not exposed.
+ */
+export async function failOutboundDelivery(accountId: string, externalId: string) {
+  const request = await prisma.outboundMessageRequest.findFirst({
+    where: { accountId, externalId, status: OutboundMessageStatus.SENT },
+    select: { id: true, requestedById: true },
+  });
+  if (!request) return;
+  await prisma.$transaction([
+    prisma.outboundMessageRequest.update({ where: { id: request.id }, data: { status: OutboundMessageStatus.FAILED, safeError: "WhatsApp no pudo entregar el mensaje." } }),
+    prisma.auditLog.create({ data: { accountId, userId: request.requestedById, action: "OUTBOUND_DELIVERY_FAILED", entity: "OutboundMessageRequest", entityId: request.id } }),
+  ]);
+}
