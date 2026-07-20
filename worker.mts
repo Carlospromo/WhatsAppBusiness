@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/rules-of-hooks -- Baileys exports a state helper; this is a Node worker. */
-/* WhatsApp worker: every account owns an isolated socket and auth directory. */
+/* WhatsApp worker (ESM): every account owns an isolated socket and auth directory. */
 import "dotenv/config";
 import { mkdir, rm } from "node:fs/promises";
 import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, WAMessageStatus } from "@whiskeysockets/baileys";
