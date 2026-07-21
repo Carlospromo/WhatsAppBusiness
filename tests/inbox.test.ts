@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { directConversationJid, messagesFromNewestPage, validateMessageBody, parseCursor } from "../lib/inbox";
 import { canManageMessages, canSendMessages } from "../lib/authorization";
 import { outboundDestinationJid, resolveOutboundDestination } from "../lib/whatsapp/outbound-destination";
-import { outboundAckOutcome } from "../lib/whatsapp/outbound-ack";
+import { outboundAckOutcome, safeOutboundRejectionCode, safeOutboundRejectionMessage } from "../lib/whatsapp/outbound-ack";
 
 describe("inbox safety", () => {
   it("validates manual text and cursor values", () => { expect(validateMessageBody(" hola ")).toBe("hola"); expect(validateMessageBody(" ")).toBeNull(); expect(validateMessageBody("x".repeat(2001))).toBeNull(); expect(parseCursor("bad!")).toBeUndefined(); });
@@ -20,6 +20,12 @@ describe("inbox safety", () => {
     expect(outboundAckOutcome(1, 0, 2)).toBe("PENDING");
     expect(outboundAckOutcome(2, 0, 2)).toBe("ACKNOWLEDGED");
     expect(outboundAckOutcome(0, 0, 2)).toBe("REJECTED");
+  });
+  it("retains only safe, actionable WhatsApp rejection codes", () => {
+    expect(safeOutboundRejectionCode(["463"])).toBe(463);
+    expect(safeOutboundRejectionMessage(463)).toContain("restringido");
+    expect(safeOutboundRejectionCode(["479"])).toBe(479);
+    expect(safeOutboundRejectionCode(["999", "sensitive detail"])).toBeUndefined();
   });
   it("keeps viewers read-only", () => { expect(canSendMessages("VIEWER")).toBe(false); expect(canManageMessages("VIEWER")).toBe(false); expect(canSendMessages("AGENT")).toBe(true); });
   it("uses the oldest visible message as cursor without dropping it", () => {
