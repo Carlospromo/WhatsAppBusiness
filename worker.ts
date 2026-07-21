@@ -10,7 +10,7 @@ import { auditConnection, updateConnection } from "./lib/whatsapp/connection";
 import { maskPhone, normalizeWhatsAppMessage } from "./lib/whatsapp/normalize";
 import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
-import { claimNextOutboundRequest, completeOutboundRequest, failOutboundDelivery, failOutboundRequest, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
+import { attachOutboundExternalId, claimNextOutboundRequest, completeOutboundRequest, failOutboundDelivery, failOutboundRequest, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
 import { resolveOutboundDestination } from "./lib/whatsapp/outbound-destination";
 import { outboundAckOutcome, safeOutboundRejectionCode, safeOutboundRejectionMessage } from "./lib/whatsapp/outbound-ack";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
@@ -195,13 +195,15 @@ async function processOutbound() {
       const externalId = sent.key.id;
       if (!externalId) throw new Error("missing message id");
       if (!sent.message) throw new Error("missing message payload");
+      if (!(await attachOutboundExternalId(request.id, externalId))) throw new Error("outbound request could not be correlated");
+      operationalLog("outbound.correlation_persisted", { ...logContext, message: safeLogRef(externalId), phase: "relay_started", status: "SENDING" });
       await socket.relayMessage(destination.jid, sent.message, {
         messageId: externalId,
         useUserDevicesCache: false,
       });
       operationalLog("outbound.relay_accepted", { ...logContext, message: safeLogRef(externalId), phase: "relay_accepted", status: "SENDING" });
-      await recordOutboundRelayAccepted(request, externalId, destination.jid);
-      operationalLog("outbound.persisted", { ...logContext, message: safeLogRef(externalId), phase: "persisted", status: "SENDING" });
+      const relayStillPending = await recordOutboundRelayAccepted(request, externalId, destination.jid);
+      operationalLog("outbound.persisted", { ...logContext, message: safeLogRef(externalId), phase: "persisted", status: relayStillPending ? "SENDING" : "FAILED" });
       if (request.conversation.type === "DIRECT") try { await refreshContactProfilePicture(accountId, socket, request.conversation.jid); } catch { /* A profile picture must never change the outcome of an accepted relay. */ }
     } catch (error) {
       operationalLog("outbound.rejected", { ...logContext, phase: "relay_started", status: "FAILED", ...safeErrorInfo(error) }, "error");
