@@ -30,6 +30,7 @@ function optionalSeconds(name, fallback, minimum, maximum) {
 }
 const syncInterval = optionalSeconds("WA_SYNC_INTERVAL_SECONDS", 300, 60, 86_400);
 const syncWindow = optionalSeconds("WA_SYNC_WINDOW_SECONDS", 45, 10, 900);
+const syncConnectTimeout = optionalSeconds("WA_SYNC_CONNECT_TIMEOUT_SECONDS", 45, 15, 900);
 optionalSeconds("WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
 optionalSeconds("WA_LINK_WINDOW_SECONDS", 120, 30, 600);
-if (syncWindow >= syncInterval) throw new Error("WA_SYNC_WINDOW_SECONDS debe ser menor que WA_SYNC_INTERVAL_SECONDS.");
+if (syncWindow + syncConnectTimeout > syncInterval) throw new Error("WA_SYNC_WINDOW_SECONDS más WA_SYNC_CONNECT_TIMEOUT_SECONDS no puede superar WA_SYNC_INTERVAL_SECONDS.");

@@ -6,6 +6,7 @@ describe("periodic WhatsApp synchronization", () => {
     expect(periodicSyncConfig({})).toEqual({
       intervalMs: 300_000,
       windowMs: 45_000,
+      connectTimeoutMs: 45_000,
       accountCheckMs: 15_000,
       linkWindowMs: 120_000,
     });
@@ -15,10 +16,11 @@ describe("periodic WhatsApp synchronization", () => {
     expect(periodicSyncConfig({
       WA_SYNC_INTERVAL_SECONDS: "600",
       WA_SYNC_WINDOW_SECONDS: "60",
+      WA_SYNC_CONNECT_TIMEOUT_SECONDS: "60",
       WA_ACCOUNT_CHECK_SECONDS: "20",
       WA_LINK_WINDOW_SECONDS: "180",
-    })).toMatchObject({ intervalMs: 600_000, windowMs: 60_000, accountCheckMs: 20_000, linkWindowMs: 180_000 });
-    expect(() => periodicSyncConfig({ WA_SYNC_INTERVAL_SECONDS: "60", WA_SYNC_WINDOW_SECONDS: "60" })).toThrow("menor");
+    })).toMatchObject({ intervalMs: 600_000, windowMs: 60_000, connectTimeoutMs: 60_000, accountCheckMs: 20_000, linkWindowMs: 180_000 });
+    expect(() => periodicSyncConfig({ WA_SYNC_INTERVAL_SECONDS: "60", WA_SYNC_WINDOW_SECONDS: "45", WA_SYNC_CONNECT_TIMEOUT_SECONDS: "45" })).toThrow("no puede superar");
   });
 
   it("does not permit an idle account to open a socket", () => {

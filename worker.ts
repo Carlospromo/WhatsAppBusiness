@@ -23,6 +23,13 @@ import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
 const syncConfig = periodicSyncConfig();
+type WorkerSocket = Awaited<ReturnType<typeof makeWASocket>>;
+type ScheduledSocketState = {
+  socket: WorkerSocket;
+  opened: boolean;
+  receivedPendingNotifications: boolean;
+  closeTimer?: ReturnType<typeof setTimeout>;
+};
 let stopping = false;
 const sockets = new Map<string, Awaited<ReturnType<typeof makeWASocket>>>();
 const connecting = new Set<string>();
@@ -33,6 +40,7 @@ const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const explicitLinking = new Set<string>();
 const explicitLinkTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const reachoutRestrictions = new Map<string, boolean>();
+const scheduledSocketStates = new Map<string, ScheduledSocketState>();
 let scheduledWindowActive = false;
 let scheduledWindowTimer: ReturnType<typeof setTimeout> | undefined;
 let outboundTimer: ReturnType<typeof setInterval> | undefined;
@@ -119,7 +127,46 @@ function stopQueueProcessorsIfIdle() {
   readReceiptTimer = undefined;
 }
 
-async function closeSocket(accountId: string, socket: Awaited<ReturnType<typeof makeWASocket>>) {
+function clearScheduledSocketState(accountId: string, socket?: WorkerSocket) {
+  const state = scheduledSocketStates.get(accountId);
+  if (!state || (socket && state.socket !== socket)) return;
+  if (state.closeTimer) clearTimeout(state.closeTimer);
+  scheduledSocketStates.delete(accountId);
+}
+
+function closeScheduledSocketAfterPendingNotifications(accountId: string, state: ScheduledSocketState) {
+  if (!state.opened || !state.receivedPendingNotifications || state.closeTimer) return;
+  state.closeTimer = setTimeout(() => {
+    if (scheduledSocketStates.get(accountId) !== state) return;
+    operationalLog("sync.window_ready_finished", { account: safeLogRef(accountId), windowMs: syncConfig.windowMs }, "debug");
+    void closeSocket(accountId, state.socket).catch((error) => operationalLog("sync.window_close_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error"));
+  }, syncConfig.windowMs);
+  operationalLog("sync.pending_notifications_ready", { account: safeLogRef(accountId), windowMs: syncConfig.windowMs });
+}
+
+function registerScheduledSocket(accountId: string, socket: WorkerSocket) {
+  if (!scheduledWindowActive || explicitLinking.has(accountId)) return;
+  clearScheduledSocketState(accountId);
+  scheduledSocketStates.set(accountId, { socket, opened: false, receivedPendingNotifications: false });
+}
+
+function markScheduledSocketOpen(accountId: string, socket: WorkerSocket) {
+  const state = scheduledSocketStates.get(accountId);
+  if (!state || state.socket !== socket) return;
+  state.opened = true;
+  closeScheduledSocketAfterPendingNotifications(accountId, state);
+}
+
+function markScheduledPendingNotifications(accountId: string, socket: WorkerSocket) {
+  const state = scheduledSocketStates.get(accountId);
+  if (!state || state.socket !== socket || state.receivedPendingNotifications) return;
+  state.receivedPendingNotifications = true;
+  operationalLog("sync.pending_notifications_received", { account: safeLogRef(accountId) });
+  closeScheduledSocketAfterPendingNotifications(accountId, state);
+}
+
+async function closeSocket(accountId: string, socket: WorkerSocket) {
+  clearScheduledSocketState(accountId, socket);
   if (sockets.get(accountId) === socket) sockets.delete(accountId);
   await presence.dispose(accountId, socket);
   try {
@@ -167,15 +214,15 @@ async function endScheduledWindow() {
   scheduledWindowTimer = undefined;
   for (const accountId of [...reconnectTimers.keys()]) if (!explicitLinking.has(accountId)) resetReconnectDelay(accountId);
   for (const [accountId, socket] of [...sockets]) if (!explicitLinking.has(accountId)) await closeSocket(accountId, socket);
-  operationalLog("sync.window_finished", { windowMs: syncConfig.windowMs }, "debug");
+  operationalLog("sync.window_finished", { connectTimeoutMs: syncConfig.connectTimeoutMs, windowMs: syncConfig.windowMs }, "debug");
 }
 
 async function startScheduledWindow() {
   if (stopping || scheduledWindowActive) return;
   scheduledWindowActive = true;
   if (scheduledWindowTimer) clearTimeout(scheduledWindowTimer);
-  scheduledWindowTimer = setTimeout(() => void endScheduledWindow().catch((error) => operationalLog("sync.window_finish_failed", safeErrorInfo(error), "error")), syncConfig.windowMs);
-  operationalLog("sync.window_started", { intervalMs: syncConfig.intervalMs, windowMs: syncConfig.windowMs }, "debug");
+  scheduledWindowTimer = setTimeout(() => void endScheduledWindow().catch((error) => operationalLog("sync.window_finish_failed", safeErrorInfo(error), "error")), syncConfig.connectTimeoutMs + syncConfig.windowMs);
+  operationalLog("sync.window_started", { intervalMs: syncConfig.intervalMs, connectTimeoutMs: syncConfig.connectTimeoutMs, windowMs: syncConfig.windowMs }, "debug");
   await syncAccounts(true);
 }
 
@@ -211,6 +258,7 @@ async function connect(accountId: string) {
       return;
     }
     sockets.set(accountId, activeSocket);
+    registerScheduledSocket(accountId, activeSocket);
     startQueueProcessors();
     operationalLog("connection.socket_created", { account: safeLogRef(accountId) });
     activeSocket.ev.on("creds.update", saveCreds);
@@ -248,13 +296,14 @@ async function connect(accountId: string) {
         }
       }
     });
-    activeSocket.ev.on("connection.update", async ({ connection, lastDisconnect, qr, reachoutTimeLock }) => {
+    activeSocket.ev.on("connection.update", async ({ connection, lastDisconnect, qr, reachoutTimeLock, receivedPendingNotifications }) => {
       if (sockets.get(accountId) !== activeSocket) return;
       if (reachoutTimeLock) {
         const isActive = reachoutTimeLock.isActive === true;
         reachoutRestrictions.set(accountId, isActive);
         operationalLog("outbound.restriction_updated", { account: safeLogRef(accountId), code: 463, active: isActive, phase: "ack_received" }, isActive ? "error" : "info");
       }
+      if (receivedPendingNotifications === true) markScheduledPendingNotifications(accountId, activeSocket);
       if (qr) { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
       if (connection === "open") {
         if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; }
@@ -263,11 +312,13 @@ async function connect(accountId: string) {
         await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null });
         await auditConnection(accountId, "WHATSAPP_CONNECTED");
         await presence.markIdle(accountId, activeSocket);
+        markScheduledSocketOpen(accountId, activeSocket);
         operationalLog("connection.open", { account: safeLogRef(accountId) });
         void enqueueAccountWork(accountId, async () => { await refreshRecentContactProfilePictures(accountId, activeSocket); await recoverPendingMedia(accountId, activeSocket); });
       }
       if (connection === "close") {
         sockets.delete(accountId);
+        clearScheduledSocketState(accountId, activeSocket);
         void presence.dispose(accountId, activeSocket);
         stopQueueProcessorsIfIdle();
         if (stopping || !(await isAccountActive(accountId))) return;
@@ -459,6 +510,8 @@ function startWorker() {
     for (const [accountId, socket] of [...sockets]) {
       await closeSocket(accountId, socket);
     }
+    for (const state of scheduledSocketStates.values()) if (state.closeTimer) clearTimeout(state.closeTimer);
+    scheduledSocketStates.clear();
     stopQueueProcessorsIfIdle();
     await prisma.$disconnect();
     process.exit(0);

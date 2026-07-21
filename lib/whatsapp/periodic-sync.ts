@@ -1,6 +1,7 @@
 export type PeriodicSyncConfig = {
   intervalMs: number;
   windowMs: number;
+  connectTimeoutMs: number;
   accountCheckMs: number;
   linkWindowMs: number;
 };
@@ -33,16 +34,18 @@ function secondsFromEnvironment(
 export function periodicSyncConfig(environment: Environment = process.env): PeriodicSyncConfig {
   const intervalSeconds = secondsFromEnvironment(environment, "WA_SYNC_INTERVAL_SECONDS", 300, 60, 86_400);
   const windowSeconds = secondsFromEnvironment(environment, "WA_SYNC_WINDOW_SECONDS", 45, 10, 900);
+  const connectTimeoutSeconds = secondsFromEnvironment(environment, "WA_SYNC_CONNECT_TIMEOUT_SECONDS", 45, 15, 900);
   const accountCheckSeconds = secondsFromEnvironment(environment, "WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
   const linkWindowSeconds = secondsFromEnvironment(environment, "WA_LINK_WINDOW_SECONDS", 120, 30, 600);
 
-  if (windowSeconds >= intervalSeconds) {
-    throw new Error("WA_SYNC_WINDOW_SECONDS debe ser menor que WA_SYNC_INTERVAL_SECONDS.");
+  if (windowSeconds + connectTimeoutSeconds > intervalSeconds) {
+    throw new Error("WA_SYNC_WINDOW_SECONDS más WA_SYNC_CONNECT_TIMEOUT_SECONDS no puede superar WA_SYNC_INTERVAL_SECONDS.");
   }
 
   return {
     intervalMs: intervalSeconds * SECOND,
     windowMs: windowSeconds * SECOND,
+    connectTimeoutMs: connectTimeoutSeconds * SECOND,
     accountCheckMs: accountCheckSeconds * SECOND,
     linkWindowMs: linkWindowSeconds * SECOND,
   };
