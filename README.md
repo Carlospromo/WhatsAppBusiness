@@ -35,7 +35,7 @@ Solo `ADMIN` puede gestionar usuarios, consultar auditoría, revisar el estado r
 
 ## Desarrollo local
 
-Requiere Node.js 20 o superior.
+Requiere Node.js 22 o superior.
 
 ```bash
 npm install
@@ -123,6 +123,31 @@ Desde `/dashboard/administracion/cuentas` se crea una cuenta indicando un nombre
 Para vincular un número, abre **Vinculación**, selecciona la cuenta y pulsa **Solicitar vinculación**. Cuando aparezca el QR, en el teléfono abre WhatsApp, ve a **Dispositivos vinculados** y escanéalo. El QR solo se sirve a administradores autenticados, no se incorpora a URLs públicas ni se escribe en los registros de la aplicación.
 
 Si una sesión queda desvinculada, un administrador puede solicitar una **nueva vinculación**. Esta acción reinicia únicamente las credenciales persistentes de esa cuenta y pide un nuevo escaneo; una desconexión transitoria no borra por sí misma ninguna sesión.
+
+## Worker Baileys v7 y diagnostico de envios
+
+El worker usa `@whiskeysockets/baileys` **7.0.0-rc13**, fijado sin rangos de versiones. La migracion sustituye la ejecucion anterior con `tsx worker.mts`, que en Railway fallaba al resolver `whatsapp-rust-bridge` como CommonJS, por un artefacto ESM compilado que se inicia con `node dist/worker/worker.js`.
+
+Comprobaciones del worker:
+
+```bash
+npm run worker:build
+npm run worker:verify
+```
+
+`worker:verify` importa exactamente el artefacto ESM de produccion sin conectar con WhatsApp ni PostgreSQL y debe escribir `worker-runtime-ok`. El Dockerfile ejecuta la misma comprobacion durante el build; CI tambien construye la imagen y vuelve a ejecutarla dentro del contenedor.
+
+Baileys v7 conserva el JID de una conversacion existente y usa sus mecanismos internos de mapeo LID/PN; la aplicacion nunca inventa un numero a partir de un LID. El worker registra solo referencias hasheadas, el tipo de destino y las fases de entrega. Un acuse local no marca una solicitud como enviada: queda `SENDING` hasta recibir un acuse de servidor. Un rechazo se marca como fallido y no genera reintentos agresivos.
+
+### Despliegue controlado
+
+1. Prueba primero la rama en un servicio Railway aislado, con PostgreSQL, volumen `/data` y cuenta de WhatsApp de prueba propios.
+2. No ejecutes v6 y v7 a la vez sobre una misma sesion ni compartas el volumen entre ambos servicios.
+3. Comprueba vinculacion, recepcion, envio a conversaciones PN y LID, estados de cola y logs redactados.
+4. Antes de produccion, realiza una copia de PostgreSQL y conserva el volumen `/data/wa-auth` intacto.
+5. Despliega con una sola replica. Si el worker no llega a conectar o los rechazos son sistematicos, restaura la imagen anterior sin borrar la sesion.
+
+Baileys v7 mejora compatibilidad tecnica, pero no garantiza que WhatsApp acepte un envio ni elimina restricciones aplicadas por WhatsApp. No versiones QR, numeros, mensajes, credenciales ni sesiones.
 
 ## Fase 8: medios entrantes privados
 
