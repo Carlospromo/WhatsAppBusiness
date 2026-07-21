@@ -12,6 +12,7 @@
     "worker:build": "tsc --project tsconfig.worker.json && node scripts/finalize-worker-esm.mjs",
     "worker:verify": "npm run worker:build && node scripts/verify-worker-esm.mjs",
     "worker": "node dist/worker/worker.js",
+    "worker:supervised": "node scripts/run-worker.mjs",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
