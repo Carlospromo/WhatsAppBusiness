@@ -2,7 +2,7 @@
 /* WhatsApp worker: every account owns an isolated socket and auth directory. */
 import "dotenv/config";
 import { mkdir, rm } from "node:fs/promises";
-import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, WAMessageStatus } from "@whiskeysockets/baileys";
+import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, generateWAMessage, useMultiFileAuthState, WAMessageStatus } from "@whiskeysockets/baileys";
 import pino from "pino";
 import { WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "./lib/prisma";
@@ -15,6 +15,8 @@ import { resolveOutboundDestination } from "./lib/whatsapp/outbound-destination"
 import { outboundAckOutcome } from "./lib/whatsapp/outbound-ack";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
+import { getOutboundMessageForRetry } from "./lib/whatsapp/message-retry";
+import { installDependencySessionLogRedaction } from "./lib/whatsapp/dependency-log-redaction";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
@@ -29,6 +31,7 @@ const reachoutRestrictions = new Map<string, boolean>();
 // Baileys can log raw protocol nodes. All production diagnostics go through
 // operationalLog instead, which only emits hashed references and safe fields.
 const baileysLogger = pino({ level: "silent" });
+installDependencySessionLogRedaction();
 
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
 
@@ -91,6 +94,9 @@ async function connect(accountId: string) {
       // one-minute timeout without affecting real-time messages or sending.
       fireInitQueries: false,
       markOnlineOnConnect: false,
+      // A retry receipt can arrive after the in-memory Baileys cache has been
+      // cleared. The persisted manual text is sufficient to rebuild it.
+      getMessage: async (key) => getOutboundMessageForRetry(accountId, key.id),
     });
     socket = activeSocket;
     sockets.set(accountId, activeSocket);
@@ -174,9 +180,24 @@ async function processOutbound() {
     try {
       operationalLog("outbound.destination_resolved", { ...logContext, phase: "destination_resolved", status: "SENDING" });
       operationalLog("outbound.relay_started", { ...logContext, phase: "relay_started", status: "SENDING" });
-      const sent = await socket.sendMessage(destination.jid, { text: request.body });
-      const externalId = sent?.key.id;
+      // Refresh the device list for this one explicit manual send. It avoids
+      // encrypting against a stale recipient-device cache after a relink or
+      // a recipient device change; it is not a contact discovery operation.
+      const sent = await generateWAMessage(destination.jid, { text: request.body }, {
+        userJid: socket.user.id,
+        logger: baileysLogger,
+        getUrlInfo: async () => undefined,
+        // Required by Baileys' generic generator. This text-only route never
+        // invokes it and still does not expose media sending.
+        upload: socket.waUploadToServer,
+      });
+      const externalId = sent.key.id;
       if (!externalId) throw new Error("missing message id");
+      if (!sent.message) throw new Error("missing message payload");
+      await socket.relayMessage(destination.jid, sent.message, {
+        messageId: externalId,
+        useUserDevicesCache: false,
+      });
       operationalLog("outbound.relay_accepted", { ...logContext, message: safeLogRef(externalId), phase: "relay_accepted", status: "SENDING" });
       await recordOutboundRelayAccepted(request, externalId, destination.jid);
       operationalLog("outbound.persisted", { ...logContext, message: safeLogRef(externalId), phase: "persisted", status: "SENDING" });
