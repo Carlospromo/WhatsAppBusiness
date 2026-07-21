@@ -38,14 +38,14 @@ export async function failOutboundRequest(id: string, safeError = "No se pudo en
  * the encrypted message. Keep the request state truthful when Baileys later
  * reports a delivery error; raw WhatsApp codes are deliberately not exposed.
  */
-export async function failOutboundDelivery(accountId: string, externalId: string) {
+export async function failOutboundDelivery(accountId: string, externalId: string, safeError = "WhatsApp no pudo entregar el mensaje.") {
   const request = await prisma.outboundMessageRequest.findFirst({
     where: { accountId, externalId, status: { in: [OutboundMessageStatus.SENDING, OutboundMessageStatus.SENT] } },
     select: { id: true, requestedById: true },
   });
   if (!request) return;
   await prisma.$transaction([
-    prisma.outboundMessageRequest.update({ where: { id: request.id }, data: { status: OutboundMessageStatus.FAILED, safeError: "WhatsApp no pudo entregar el mensaje." } }),
+    prisma.outboundMessageRequest.update({ where: { id: request.id }, data: { status: OutboundMessageStatus.FAILED, safeError } }),
     prisma.auditLog.create({ data: { accountId, userId: request.requestedById, action: "OUTBOUND_DELIVERY_REJECTED", entity: "OutboundMessageRequest", entityId: request.id } }),
   ]);
 }

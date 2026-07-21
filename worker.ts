@@ -12,7 +12,7 @@ import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
 import { claimNextOutboundRequest, completeOutboundRequest, failOutboundDelivery, failOutboundRequest, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
 import { resolveOutboundDestination } from "./lib/whatsapp/outbound-destination";
-import { outboundAckOutcome } from "./lib/whatsapp/outbound-ack";
+import { outboundAckOutcome, safeOutboundRejectionCode, safeOutboundRejectionMessage } from "./lib/whatsapp/outbound-ack";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
 import { getOutboundMessageForRetry } from "./lib/whatsapp/message-retry";
@@ -112,8 +112,9 @@ async function connect(accountId: string) {
         if (!update.key.fromMe || !externalId || typeof status !== "number") continue;
         const outcome = outboundAckOutcome(status, WAMessageStatus.ERROR, WAMessageStatus.SERVER_ACK);
         if (outcome === "REJECTED") {
-          operationalLog("outbound.rejected", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "FAILED", code: reachoutRestrictions.get(accountId) ? 463 : undefined }, "error");
-          void failOutboundDelivery(accountId, externalId).catch((error) => operationalLog("outbound.delivery_failure_persist_failed", { account: safeLogRef(accountId), message: safeLogRef(externalId), ...safeErrorInfo(error) }, "error"));
+          const code = safeOutboundRejectionCode(update.update.messageStubParameters) ?? (reachoutRestrictions.get(accountId) ? 463 : undefined);
+          operationalLog("outbound.rejected", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "FAILED", code }, "error");
+          void failOutboundDelivery(accountId, externalId, safeOutboundRejectionMessage(code)).catch((error) => operationalLog("outbound.delivery_failure_persist_failed", { account: safeLogRef(accountId), message: safeLogRef(externalId), ...safeErrorInfo(error) }, "error"));
           continue;
         }
         if (outcome === "ACKNOWLEDGED") {
