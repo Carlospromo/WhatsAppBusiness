@@ -71,17 +71,18 @@ npm run build
 | `WA_AUTH_DIR` | Ruta de la sesión vinculada. En Railway: `/data/wa-auth`. |
 | `LOG_LEVEL` | Nivel de log técnico. Con `info` se registran eventos operativos de conexión y salida; con `debug`, también esperas de cola. Nunca se registran mensajes, QR, números completos, JID, tokens ni URLs. |
 | `WA_SYNC_INTERVAL_SECONDS` | Frecuencia de las ventanas de sincronización. Predeterminado: `300` (5 minutos). Debe ser de 60 a 86.400. |
-| `WA_SYNC_WINDOW_SECONDS` | Duración máxima de una ventana normal. Predeterminado: `45`. Debe ser menor que el intervalo. |
+| `WA_SYNC_WINDOW_SECONDS` | Tiempo adicional de procesamiento después de que Baileys haya confirmado la conexión y las notificaciones pendientes. Predeterminado: `45`. |
+| `WA_SYNC_CONNECT_TIMEOUT_SECONDS` | Tiempo máximo reservado para abrir la conexión y recibir las notificaciones pendientes. Predeterminado: `45`. La suma con la ventana no puede superar el intervalo. |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia con que el worker detecta una solicitud explícita de QR o una cuenta desactivada, sin abrir sockets normales. Predeterminado: `15`. |
 | `WA_LINK_WINDOW_SECONDS` | Tiempo máximo reservado a un QR solicitado explícitamente. Predeterminado: `120`. |
 
 ## Sincronización periódica de WhatsApp
 
-Para reducir consumo de recursos y no mantener dispositivos vinculados abiertos de forma permanente, el worker abre cada cuenta ya vinculada solo durante una ventana de sincronización. Con la configuración predeterminada, abre una ventana inicial al iniciar el contenedor y después otra cada cinco minutos, de hasta 45 segundos. Entre ventanas no conserva sockets de WhatsApp abiertos.
+Para reducir consumo de recursos y no mantener dispositivos vinculados abiertos de forma permanente, el worker abre cada cuenta ya vinculada solo durante una ventana de sincronización. Con la configuración predeterminada, reserva hasta 45 segundos para conectar y recibir las notificaciones pendientes de WhatsApp; solo entonces inicia hasta 45 segundos adicionales de procesamiento. Entre ventanas no conserva sockets de WhatsApp abiertos.
 
 Esto implica que un mensaje entrante, un envío manual, una descarga de medio o un recibo de lectura puede tardar hasta el siguiente ciclo. Las acciones se mantienen en PostgreSQL como solicitudes pendientes; no se descartan porque el socket esté cerrado. Una solicitud explícita de QR es la única excepción: el worker abre una ventana temporal inmediata para mostrarlo y escanearlo.
 
-El estado `CONNECTED` en la interfaz significa que la cuenta sigue vinculada y preparada para el siguiente ciclo; no significa que exista un WebSocket abierto en ese instante. No configures un intervalo inferior a un minuto ni una ventana igual o mayor que el intervalo.
+El estado `CONNECTED` en la interfaz significa que la cuenta sigue vinculada y preparada para el siguiente ciclo; no significa que exista un WebSocket abierto en ese instante. No configures un intervalo inferior a un minuto ni una suma de espera de conexión y ventana superior al intervalo.
 
 ## Despliegue en Railway
 
