@@ -20,3 +20,16 @@ for (const name of ["MEDIA_MAX_IMAGE_BYTES", "MEDIA_MAX_AUDIO_BYTES", "MEDIA_MAX
   const value = Number(process.env[name]);
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} debe ser un entero positivo.`);
 }
+function optionalSeconds(name, fallback, minimum, maximum) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} debe ser un número entero de segundos.`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`${name} debe estar entre ${minimum} y ${maximum} segundos.`);
+  return value;
+}
+const syncInterval = optionalSeconds("WA_SYNC_INTERVAL_SECONDS", 300, 60, 86_400);
+const syncWindow = optionalSeconds("WA_SYNC_WINDOW_SECONDS", 45, 10, 900);
+optionalSeconds("WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
+optionalSeconds("WA_LINK_WINDOW_SECONDS", 120, 30, 600);
+if (syncWindow >= syncInterval) throw new Error("WA_SYNC_WINDOW_SECONDS debe ser menor que WA_SYNC_INTERVAL_SECONDS.");
