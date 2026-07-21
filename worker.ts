@@ -17,6 +17,7 @@ import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/medi
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest, readReceiptKeys } from "./lib/whatsapp/read-receipts";
 import { getOutboundMessageForRetry } from "./lib/whatsapp/message-retry";
 import { installDependencySessionLogRedaction } from "./lib/whatsapp/dependency-log-redaction";
+import { TransientPresenceManager } from "./lib/whatsapp/transient-presence";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
@@ -32,6 +33,9 @@ const reachoutRestrictions = new Map<string, boolean>();
 // operationalLog instead, which only emits hashed references and safe fields.
 const baileysLogger = pino({ level: "silent" });
 installDependencySessionLogRedaction();
+const presence = new TransientPresenceManager(3_000, (accountId, error) => {
+  operationalLog("presence.update_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "debug");
+});
 
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
 
@@ -104,7 +108,20 @@ async function connect(accountId: string) {
     activeSocket.ev.on("creds.update", saveCreds);
     activeSocket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
     activeSocket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
-    activeSocket.ev.on("messages.upsert", ({ messages, type }) => { if (type === "notify") void enqueueAccountWork(accountId, async () => { for (const raw of messages) { const message = normalizeWhatsAppMessage(raw); if (message) { const persisted = await persistMessage(accountId, message); if (persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, activeSocket, raw); if (message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, activeSocket, message.conversationJid); } } }); });
+    activeSocket.ev.on("messages.upsert", ({ messages, type }) => {
+      if (type !== "notify") return;
+      void enqueueAccountWork(accountId, async () => {
+        for (const raw of messages) {
+          const message = normalizeWhatsAppMessage(raw);
+          if (!message) continue;
+          const persisted = message.direction === "INBOUND"
+            ? await presence.duringActivity(accountId, activeSocket, () => persistMessage(accountId, message))
+            : await persistMessage(accountId, message);
+          if (persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, activeSocket, raw);
+          if (message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, activeSocket, message.conversationJid);
+        }
+      });
+    });
     activeSocket.ev.on("messages.update", (updates) => {
       for (const update of updates) {
         const externalId = update.key.id;
@@ -131,8 +148,31 @@ async function connect(accountId: string) {
         operationalLog("outbound.restriction_updated", { account: safeLogRef(accountId), code: 463, active: isActive, phase: "ack_received" }, isActive ? "error" : "info");
       }
       if (qr) { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000) }); await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE"); }
-      if (connection === "open") { if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; } resetReconnectDelay(accountId); const jid = activeSocket.user?.id ?? null; await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null }); await auditConnection(accountId, "WHATSAPP_CONNECTED"); operationalLog("connection.open", { account: safeLogRef(accountId) }); void enqueueAccountWork(accountId, async () => { await refreshRecentContactProfilePictures(accountId, activeSocket); await recoverPendingMedia(accountId, activeSocket); }); }
-      if (connection === "close") { sockets.delete(accountId); if (stopping || !(await isAccountActive(accountId))) return; const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode; if (code === DisconnectReason.loggedOut) { resetReconnectDelay(accountId); await updateConnection(accountId, { status: WhatsAppConnectionStatus.DISCONNECTED, qrCode: null, qrExpiresAt: null, lastError: "Sesión desvinculada." }); await auditConnection(accountId, "WHATSAPP_DISCONNECTED"); return; } await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "Conexión interrumpida; reintentando." }); await auditConnection(accountId, "WHATSAPP_CONNECTION_ERROR"); scheduleReconnect(accountId); }
+      if (connection === "open") {
+        if (!(await isAccountActive(accountId))) { await activeSocket.end(undefined); return; }
+        resetReconnectDelay(accountId);
+        const jid = activeSocket.user?.id ?? null;
+        await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: jid, maskedPhone: maskPhone(jid), lastError: null });
+        await auditConnection(accountId, "WHATSAPP_CONNECTED");
+        await presence.markIdle(accountId, activeSocket);
+        operationalLog("connection.open", { account: safeLogRef(accountId) });
+        void enqueueAccountWork(accountId, async () => { await refreshRecentContactProfilePictures(accountId, activeSocket); await recoverPendingMedia(accountId, activeSocket); });
+      }
+      if (connection === "close") {
+        sockets.delete(accountId);
+        void presence.dispose(accountId, activeSocket);
+        if (stopping || !(await isAccountActive(accountId))) return;
+        const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
+        if (code === DisconnectReason.loggedOut) {
+          resetReconnectDelay(accountId);
+          await updateConnection(accountId, { status: WhatsAppConnectionStatus.DISCONNECTED, qrCode: null, qrExpiresAt: null, lastError: "Sesión desvinculada." });
+          await auditConnection(accountId, "WHATSAPP_DISCONNECTED");
+          return;
+        }
+        await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "Conexión interrumpida; reintentando." });
+        await auditConnection(accountId, "WHATSAPP_CONNECTION_ERROR");
+        scheduleReconnect(accountId);
+      }
     });
   } catch (error) {
     if (socket && sockets.get(accountId) === socket) sockets.delete(accountId);
@@ -153,11 +193,12 @@ async function syncAccounts() {
     const socket = sockets.get(account.id);
     if (socket && account.connection?.status === WhatsAppConnectionStatus.DISCONNECTED) {
       sockets.delete(account.id);
+      await presence.dispose(account.id, socket);
       try { await socket.end(undefined); } catch { /* already closed */ }
     }
     void connect(account.id);
   }
-  for (const [id, socket] of sockets) if (!allowed.has(id)) { sockets.delete(id); try { await socket.end(undefined); } catch { /* already closed */ } }
+  for (const [id, socket] of sockets) if (!allowed.has(id)) { sockets.delete(id); await presence.dispose(id, socket); try { await socket.end(undefined); } catch { /* already closed */ } }
 }
 
 async function processOutbound() {
@@ -178,29 +219,34 @@ async function processOutbound() {
       await failOutboundRequest(request.id, "No se encontró una identidad válida para el destinatario.");
       continue;
     }
+    const destinationJid = destination.jid;
     try {
       operationalLog("outbound.destination_resolved", { ...logContext, phase: "destination_resolved", status: "SENDING" });
       operationalLog("outbound.relay_started", { ...logContext, phase: "relay_started", status: "SENDING" });
       // Refresh the device list for this one explicit manual send. It avoids
       // encrypting against a stale recipient-device cache after a relink or
       // a recipient device change; it is not a contact discovery operation.
-      const sent = await generateWAMessage(destination.jid, { text: request.body }, {
-        userJid: socket.user.id,
-        logger: baileysLogger,
-        getUrlInfo: async () => undefined,
-        // Required by Baileys' generic generator. This text-only route never
-        // invokes it and still does not expose media sending.
-        upload: socket.waUploadToServer,
+      let externalId: string | null | undefined;
+      await presence.duringActivity(accountId, socket, async () => {
+        const sent = await generateWAMessage(destinationJid, { text: request.body }, {
+          userJid: socket.user!.id,
+          logger: baileysLogger,
+          getUrlInfo: async () => undefined,
+          // Required by Baileys' generic generator. This text-only route never
+          // invokes it and still does not expose media sending.
+          upload: socket.waUploadToServer,
+        });
+        externalId = sent.key.id;
+        if (!externalId) throw new Error("missing message id");
+        if (!sent.message) throw new Error("missing message payload");
+        await socket.relayMessage(destinationJid, sent.message, {
+          messageId: externalId,
+          useUserDevicesCache: false,
+        });
       });
-      const externalId = sent.key.id;
       if (!externalId) throw new Error("missing message id");
-      if (!sent.message) throw new Error("missing message payload");
-      await socket.relayMessage(destination.jid, sent.message, {
-        messageId: externalId,
-        useUserDevicesCache: false,
-      });
       operationalLog("outbound.relay_accepted", { ...logContext, message: safeLogRef(externalId), phase: "relay_accepted", status: "SENDING" });
-      await recordOutboundRelayAccepted(request, externalId, destination.jid);
+      await recordOutboundRelayAccepted(request, externalId, destinationJid);
       operationalLog("outbound.persisted", { ...logContext, message: safeLogRef(externalId), phase: "persisted", status: "SENDING" });
       if (request.conversation.type === "DIRECT") try { await refreshContactProfilePicture(accountId, socket, request.conversation.jid); } catch { /* A profile picture must never change the outcome of an accepted relay. */ }
     } catch (error) {
@@ -217,6 +263,7 @@ async function resetAuthForExplicitRelink(accountId: string, requestId: string |
     const socket = sockets.get(accountId);
     if (socket) {
       sockets.delete(accountId);
+      await presence.dispose(accountId, socket);
       try { await socket.end(undefined); } catch { /* already closed */ }
     }
     // Credentials are removed only after an authenticated administrator has
@@ -264,7 +311,18 @@ function startWorker() {
   const outboundTimer = setInterval(() => void processOutbound(), 1_500);
   const mediaTimer = setInterval(() => void processPendingMedia(), 10_000);
   const readReceiptTimer = setInterval(() => void processReadReceipts(), 2_000);
-  async function shutdown() { stopping = true; clearInterval(accountsTimer); clearInterval(outboundTimer); clearInterval(mediaTimer); clearInterval(readReceiptTimer); for (const timer of reconnectTimers.values()) clearTimeout(timer); reconnectTimers.clear(); for (const socket of sockets.values()) try { await socket.end(undefined); } catch { /* ignore */ } await prisma.$disconnect(); process.exit(0); }
+  async function shutdown() {
+    stopping = true;
+    clearInterval(accountsTimer); clearInterval(outboundTimer); clearInterval(mediaTimer); clearInterval(readReceiptTimer);
+    for (const timer of reconnectTimers.values()) clearTimeout(timer);
+    reconnectTimers.clear();
+    for (const [accountId, socket] of sockets) {
+      await presence.dispose(accountId, socket);
+      try { await socket.end(undefined); } catch { /* ignore */ }
+    }
+    await prisma.$disconnect();
+    process.exit(0);
+  }
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
 }
