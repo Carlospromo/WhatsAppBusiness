@@ -28,9 +28,13 @@ function optionalSeconds(name, fallback, minimum, maximum) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`${name} debe estar entre ${minimum} y ${maximum} segundos.`);
   return value;
 }
-const syncInterval = optionalSeconds("WA_SYNC_INTERVAL_SECONDS", 300, 60, 86_400);
-const syncWindow = optionalSeconds("WA_SYNC_WINDOW_SECONDS", 45, 10, 900);
-const syncConnectTimeout = optionalSeconds("WA_SYNC_CONNECT_TIMEOUT_SECONDS", 45, 15, 900);
+const connectionMode = process.env.WA_CONNECTION_MODE || "continuous";
+if (connectionMode !== "continuous" && connectionMode !== "periodic") throw new Error("WA_CONNECTION_MODE debe ser continuous o periodic.");
 optionalSeconds("WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
 optionalSeconds("WA_LINK_WINDOW_SECONDS", 120, 30, 600);
-if (syncWindow + syncConnectTimeout > syncInterval) throw new Error("WA_SYNC_WINDOW_SECONDS más WA_SYNC_CONNECT_TIMEOUT_SECONDS no puede superar WA_SYNC_INTERVAL_SECONDS.");
+if (connectionMode === "periodic") {
+  const syncInterval = optionalSeconds("WA_SYNC_INTERVAL_SECONDS", 300, 60, 86_400);
+  const syncWindow = optionalSeconds("WA_SYNC_WINDOW_SECONDS", 45, 10, 900);
+  const syncConnectTimeout = optionalSeconds("WA_SYNC_CONNECT_TIMEOUT_SECONDS", 45, 15, 900);
+  if (syncWindow + syncConnectTimeout > syncInterval) throw new Error("WA_SYNC_WINDOW_SECONDS más WA_SYNC_CONNECT_TIMEOUT_SECONDS no puede superar WA_SYNC_INTERVAL_SECONDS.");
+}

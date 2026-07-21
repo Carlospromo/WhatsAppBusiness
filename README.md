@@ -70,13 +70,20 @@ npm run build
 | `PORT` | Puerto proporcionado por Railway; la aplicación lo usa automáticamente. |
 | `WA_AUTH_DIR` | Ruta de la sesión vinculada. En Railway: `/data/wa-auth`. |
 | `LOG_LEVEL` | Nivel de log técnico. Con `info` se registran eventos operativos de conexión y salida; con `debug`, también esperas de cola. Nunca se registran mensajes, QR, números completos, JID, tokens ni URLs. |
+| `WA_CONNECTION_MODE` | `continuous` (predeterminado) mantiene el socket vinculado para recepción en tiempo real, con presencia `unavailable` cuando está inactivo. `periodic` abre ventanas y no garantiza recuperar mensajes llegados fuera de ellas. |
 | `WA_SYNC_INTERVAL_SECONDS` | Frecuencia de las ventanas de sincronización. Predeterminado: `300` (5 minutos). Debe ser de 60 a 86.400. |
 | `WA_SYNC_WINDOW_SECONDS` | Tiempo adicional de procesamiento después de que Baileys haya confirmado la conexión y las notificaciones pendientes. Predeterminado: `45`. |
 | `WA_SYNC_CONNECT_TIMEOUT_SECONDS` | Tiempo máximo reservado para abrir la conexión y recibir las notificaciones pendientes. Predeterminado: `45`. La suma con la ventana no puede superar el intervalo. |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia con que el worker detecta una solicitud explícita de QR o una cuenta desactivada, sin abrir sockets normales. Predeterminado: `15`. |
 | `WA_LINK_WINDOW_SECONDS` | Tiempo máximo reservado a un QR solicitado explícitamente. Predeterminado: `120`. |
 
-## Sincronización periódica de WhatsApp
+## Conexión de WhatsApp
+
+La configuración predeterminada es `WA_CONNECTION_MODE=continuous`. El worker mantiene un socket por cuenta activa para recibir mensajes nuevos en tiempo real, pero usa `markOnlineOnConnect: false` y presencia `unavailable` mientras no está procesando un mensaje o un envío manual. Así se evita que la cuenta se anuncie como disponible de forma continua sin sacrificar la recepción.
+
+El modo `periodic` es opcional y reduce el tiempo de conexión abriendo ventanas programadas. WhatsApp no garantiza que reenvíe a un dispositivo vinculado los mensajes que llegaron mientras estaba desconectado; por ello este modo no es apropiado cuando la prioridad es no perder mensajes.
+
+## Modo periódico de WhatsApp
 
 Para reducir consumo de recursos y no mantener dispositivos vinculados abiertos de forma permanente, el worker abre cada cuenta ya vinculada solo durante una ventana de sincronización. Con la configuración predeterminada, reserva hasta 45 segundos para conectar y recibir las notificaciones pendientes de WhatsApp; solo entonces inicia hasta 45 segundos adicionales de procesamiento. Entre ventanas no conserva sockets de WhatsApp abiertos.
 
