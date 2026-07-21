@@ -57,7 +57,7 @@ const presence = new TransientPresenceManager(3_000, (accountId, error) => {
 function authPath(accountId: string) { return `${authRoot}/${accountId}`; }
 
 function canUseSocket(accountId: string) {
-  return canOpenSocket(scheduledWindowActive, explicitLinking.has(accountId));
+  return canOpenSocket(syncConfig.mode, scheduledWindowActive, explicitLinking.has(accountId));
 }
 
 function clearReconnectTimer(accountId: string) {
@@ -135,6 +135,7 @@ function clearScheduledSocketState(accountId: string, socket?: WorkerSocket) {
 }
 
 function closeScheduledSocketAfterPendingNotifications(accountId: string, state: ScheduledSocketState) {
+  if (syncConfig.mode !== "periodic") return;
   if (!state.opened || !state.receivedPendingNotifications || state.closeTimer) return;
   state.closeTimer = setTimeout(() => {
     if (scheduledSocketStates.get(accountId) !== state) return;
@@ -145,12 +146,13 @@ function closeScheduledSocketAfterPendingNotifications(accountId: string, state:
 }
 
 function registerScheduledSocket(accountId: string, socket: WorkerSocket) {
-  if (!scheduledWindowActive || explicitLinking.has(accountId)) return;
+  if (syncConfig.mode !== "periodic" || !scheduledWindowActive || explicitLinking.has(accountId)) return;
   clearScheduledSocketState(accountId);
   scheduledSocketStates.set(accountId, { socket, opened: false, receivedPendingNotifications: false });
 }
 
 function markScheduledSocketOpen(accountId: string, socket: WorkerSocket) {
+  if (syncConfig.mode !== "periodic") return;
   const state = scheduledSocketStates.get(accountId);
   if (!state || state.socket !== socket) return;
   state.opened = true;
@@ -158,6 +160,7 @@ function markScheduledSocketOpen(accountId: string, socket: WorkerSocket) {
 }
 
 function markScheduledPendingNotifications(accountId: string, socket: WorkerSocket) {
+  if (syncConfig.mode !== "periodic") return;
   const state = scheduledSocketStates.get(accountId);
   if (!state || state.socket !== socket || state.receivedPendingNotifications) return;
   state.receivedPendingNotifications = true;
@@ -187,7 +190,7 @@ async function endExplicitLinkWindow(accountId: string) {
   explicitLinkTimers.delete(accountId);
   explicitLinking.delete(accountId);
   resetReconnectDelay(accountId);
-  if (!scheduledWindowActive) {
+  if (syncConfig.mode === "periodic" && !scheduledWindowActive) {
     const socket = sockets.get(accountId);
     if (socket) await closeSocket(accountId, socket);
   }
@@ -492,14 +495,21 @@ async function processReadReceipts() {
 }
 
 function startWorker() {
-  void startScheduledWindow().catch((error) => operationalLog("sync.window_start_failed", safeErrorInfo(error), "error"));
-  // Between windows this only notices an explicit administrator relink or an
-  // account deactivation. It does not create or keep WhatsApp sockets alive.
-  const accountsTimer = setInterval(() => void syncAccounts(false).catch((error) => operationalLog("account.check_failed", safeErrorInfo(error), "error")), syncConfig.accountCheckMs);
-  const scheduleTimer = setInterval(() => void startScheduledWindow().catch((error) => operationalLog("sync.window_start_failed", safeErrorInfo(error), "error")), syncConfig.intervalMs);
+  if (syncConfig.mode === "periodic") {
+    void startScheduledWindow().catch((error) => operationalLog("sync.window_start_failed", safeErrorInfo(error), "error"));
+  } else {
+    void syncAccounts(true).catch((error) => operationalLog("account.check_failed", safeErrorInfo(error), "error"));
+    operationalLog("connection.mode_continuous", { presence: "unavailable" });
+  }
+  // In continuous mode this keeps active accounts connected. In periodic mode
+  // it only notices an explicit administrator relink or deactivation.
+  const accountsTimer = setInterval(() => void syncAccounts(syncConfig.mode === "continuous").catch((error) => operationalLog("account.check_failed", safeErrorInfo(error), "error")), syncConfig.accountCheckMs);
+  const scheduleTimer = syncConfig.mode === "periodic"
+    ? setInterval(() => void startScheduledWindow().catch((error) => operationalLog("sync.window_start_failed", safeErrorInfo(error), "error")), syncConfig.intervalMs)
+    : undefined;
   async function shutdown() {
     stopping = true;
-    clearInterval(accountsTimer); clearInterval(scheduleTimer);
+    clearInterval(accountsTimer); if (scheduleTimer) clearInterval(scheduleTimer);
     if (scheduledWindowTimer) clearTimeout(scheduledWindowTimer);
     scheduledWindowTimer = undefined;
     for (const timer of reconnectTimers.values()) clearTimeout(timer);
