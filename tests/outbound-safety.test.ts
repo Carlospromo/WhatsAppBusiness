@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { outboundSafetyLimits, safeOutboundSafetyMessage } from "../lib/whatsapp/outbound-safety";
+import { MAX_OUTBOUND_ATTEMPTS, OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_CONFIRMATION_TIMEOUT_MS } from "../lib/whatsapp/outbound-confirmation";
 
 describe("outbound safety limits", () => {
   it("uses conservative defaults", () => {
@@ -24,5 +25,11 @@ describe("outbound safety limits", () => {
   it("returns a safe message without technical restriction details", () => {
     expect(safeOutboundSafetyMessage("RESTRICTED")).toContain("restringido");
     expect(safeOutboundSafetyMessage("RATE_LIMIT")).not.toContain("463");
+  });
+
+  it("does not silently retry a request without a final WhatsApp confirmation", () => {
+    expect(MAX_OUTBOUND_ATTEMPTS).toBe(3);
+    expect(OUTBOUND_CONFIRMATION_TIMEOUT_MS).toBe(15 * 60 * 1_000);
+    expect(OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE).toContain("No se reintentó");
   });
 });
