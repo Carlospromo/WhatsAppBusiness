@@ -210,3 +210,18 @@ Al abrir una conversación, un `ADMIN` o `AGENT` marca sus mensajes entrantes co
 No se crean solicitudes al listar, buscar o actualizar conversaciones en segundo plano; solo al abrir un hilo que todavía tiene mensajes sin leer. Si una cuenta está desconectada, la solicitud queda pendiente y se reintenta al recuperar la conexión. Los reintentos agotados se registran con un error seguro y sin contenido de mensajes ni identificadores técnicos.
 
 WhatsApp aplica finalmente la configuración de privacidad de recibos de lectura del teléfono vinculado. Mantén una sola réplica Railway para que el worker y su cola persistente sigan teniendo un único consumidor.
+
+## Endurecimiento operativo de WhatsApp
+
+La aplicación conserva el uso exclusivamente manual de la bandeja y añade límites preventivos por cuenta. No son una forma de evitar las decisiones de WhatsApp: reducen picos accidentales y dejan clara la situación cuando el servidor de WhatsApp limita una cuenta.
+
+| Variable | Valor predeterminado | Uso |
+| --- | --- | --- |
+| `WA_OUTBOUND_MAX_PENDING` | `20` | Máximo de solicitudes manuales pendientes o en proceso por cuenta. |
+| `WA_OUTBOUND_MAX_PER_MINUTE` | `6` | Máximo preventivo de envíos manuales por minuto y cuenta. |
+| `WA_OUTBOUND_MIN_INTERVAL_SECONDS` | `5` | Separación mínima entre intentos de envío de una cuenta. |
+| `WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY` | `10` | Máximo diario preventivo de conversaciones directas iniciadas desde la bandeja. |
+
+Cuando Baileys informa de una restricción `463` o de un Reachout Timelock, la cola de salida de esa cuenta queda pausada de forma persistente. La recepción continúa funcionando; la interfaz de vinculación avisa al administrador y no se realizan reintentos inmediatos. Si WhatsApp comunica una fecha de finalización, la pausa se libera al llegar ese momento; también se libera cuando WhatsApp comunica que la restricción ya no está activa.
+
+El worker mantiene una caché por cuenta de los metadatos de grupos. Antes de un envío manual a un grupo recupera esos metadatos una sola vez y los reutiliza durante cinco minutos, evitando consultas repetidas de participantes durante el cifrado. Si no puede obtenerlos, el envío falla de forma segura en vez de provocar consultas recurrentes. Las solicitudes, contactos, notas, etiquetas y asignaciones verifican además que el usuario tenga acceso a la cuenta implicada.

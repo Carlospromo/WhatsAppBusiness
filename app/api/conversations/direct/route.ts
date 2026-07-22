@@ -3,9 +3,10 @@ import { getCurrentUser } from "@/lib/auth";
 import { canAccessAccount } from "@/lib/account";
 import { normalizePhone } from "@/lib/address-book";
 import { canSendMessages } from "@/lib/authorization";
-import { createDirectConversationAndQueue, validateMessageBody } from "@/lib/inbox";
+import { createDirectConversationAndQueue, directConversationJid, validateMessageBody } from "@/lib/inbox";
 import { prisma } from "@/lib/prisma";
 import { operationalLog, safeLogRef } from "@/lib/operational-log";
+import { canQueueOutbound, safeOutboundSafetyMessage } from "@/lib/whatsapp/outbound-safety";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -20,6 +21,11 @@ export async function POST(request: Request) {
   if (!account) return NextResponse.json({ error: "Cuenta no disponible" }, { status: 404 });
   const phone = normalizePhone(payload.phone, account.defaultPhoneCountry);
   if (!phone) return NextResponse.json({ error: "Número de teléfono inválido" }, { status: 400 });
+  const jid = directConversationJid(phone);
+  if (!jid) return NextResponse.json({ error: "Número de teléfono inválido" }, { status: 400 });
+  const existingConversation = await prisma.conversation.findUnique({ where: { accountId_jid: { accountId, jid } }, select: { id: true } });
+  const safety = await canQueueOutbound(accountId, !existingConversation);
+  if (!safety.allowed) return NextResponse.json({ error: safeOutboundSafetyMessage(safety.reason) }, { status: 429 });
   const created = await createDirectConversationAndQueue(accountId, user.id, phone, body);
   if (!created) return NextResponse.json({ error: "Número de teléfono inválido" }, { status: 400 });
   await prisma.auditLog.create({ data: { accountId, userId: user.id, action: "OUTBOUND_DIRECT_REQUESTED", entity: "OutboundMessageRequest", entityId: created.request.id } });
