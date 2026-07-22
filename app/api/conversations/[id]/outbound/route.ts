@@ -14,7 +14,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!conversation) return NextResponse.json({ error: "No encontrada" }, { status: 404 });
   if (!await canAccessAccount(user, conversation.accountId)) return NextResponse.json({ error: "Prohibido" }, { status: 403 });
   const safety = await canQueueOutbound(conversation.accountId, false);
-  if (!safety.allowed) return NextResponse.json({ error: safeOutboundSafetyMessage(safety.reason) }, { status: 429 });
+  if (!safety.allowed) { operationalLog("outbound.queue_rejected", { account: safeLogRef(conversation.accountId), source: "conversation", reason: safety.reason }); return NextResponse.json({ error: safeOutboundSafetyMessage(safety.reason) }, { status: 429 }); }
   const queued = await queueOutboundMessage(id, conversation.accountId, user.id, body); await prisma.auditLog.create({ data: { accountId: conversation.accountId, userId: user.id, action: "OUTBOUND_REQUESTED", entity: "OutboundMessageRequest", entityId: queued.id } }); operationalLog("outbound.queued", { account: safeLogRef(conversation.accountId), request: safeLogRef(queued.id) });
   return NextResponse.json({ id: queued.id, status: queued.status }, { status: 201 });
 }

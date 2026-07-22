@@ -1,6 +1,7 @@
 import { OutboundMessageStatus } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "../prisma";
 import { persistMessage } from "./persistence";
+import { OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_CONFIRMATION_TIMEOUT_MS } from "./outbound-confirmation";
 
 export async function claimNextOutboundRequest(accountId: string) {
   const request = await prisma.outboundMessageRequest.findFirst({
@@ -64,3 +65,32 @@ export async function failOutboundDelivery(accountId: string, externalId: string
     prisma.auditLog.create({ data: { accountId, userId: request.requestedById, action: "OUTBOUND_DELIVERY_REJECTED", entity: "OutboundMessageRequest", entityId: request.id } }),
   ]);
 }
+
+/**
+ * A local relay acceptance is not a delivery confirmation. Do not replay a
+ * stale request automatically, because WhatsApp may have delivered it and a
+ * retry could duplicate the manual message.
+ */
+export async function failStaleOutboundRequests(now = new Date()) {
+  const cutoff = new Date(now.getTime() - OUTBOUND_CONFIRMATION_TIMEOUT_MS);
+  const stale = await prisma.outboundMessageRequest.findMany({
+    where: { status: OutboundMessageStatus.SENDING, updatedAt: { lt: cutoff } },
+    select: { id: true, accountId: true, requestedById: true },
+    take: 100,
+  });
+  let failed = 0;
+  for (const request of stale) {
+    const updated = await prisma.outboundMessageRequest.updateMany({
+      where: { id: request.id, status: OutboundMessageStatus.SENDING, updatedAt: { lt: cutoff } },
+      data: { status: OutboundMessageStatus.FAILED, safeError: OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE },
+    });
+    if (!updated.count) continue;
+    failed += 1;
+    await prisma.auditLog.create({
+      data: { accountId: request.accountId, userId: request.requestedById, action: "OUTBOUND_CONFIRMATION_TIMED_OUT", entity: "OutboundMessageRequest", entityId: request.id },
+    });
+  }
+  return failed;
+}
+
+export { OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_CONFIRMATION_TIMEOUT_MS } from "./outbound-confirmation";

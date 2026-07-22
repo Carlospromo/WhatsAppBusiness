@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   if (!jid) return NextResponse.json({ error: "Número de teléfono inválido" }, { status: 400 });
   const existingConversation = await prisma.conversation.findUnique({ where: { accountId_jid: { accountId, jid } }, select: { id: true } });
   const safety = await canQueueOutbound(accountId, !existingConversation);
-  if (!safety.allowed) return NextResponse.json({ error: safeOutboundSafetyMessage(safety.reason) }, { status: 429 });
+  if (!safety.allowed) { operationalLog("outbound.queue_rejected", { account: safeLogRef(accountId), source: "direct", reason: safety.reason }); return NextResponse.json({ error: safeOutboundSafetyMessage(safety.reason) }, { status: 429 }); }
   const created = await createDirectConversationAndQueue(accountId, user.id, phone, body);
   if (!created) return NextResponse.json({ error: "Número de teléfono inválido" }, { status: 400 });
   await prisma.auditLog.create({ data: { accountId, userId: user.id, action: "OUTBOUND_DIRECT_REQUESTED", entity: "OutboundMessageRequest", entityId: created.request.id } });

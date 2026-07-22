@@ -10,7 +10,7 @@ import { auditConnection, updateConnection } from "./lib/whatsapp/connection";
 import { maskPhone, normalizeWhatsAppMessage } from "./lib/whatsapp/normalize";
 import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
-import { attachOutboundExternalId, claimNextOutboundRequest, completeOutboundRequest, failOutboundDelivery, failOutboundRequest, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
+import { attachOutboundExternalId, claimNextOutboundRequest, completeOutboundRequest, failOutboundDelivery, failOutboundRequest, failStaleOutboundRequests, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
 import { resolveOutboundDestination } from "./lib/whatsapp/outbound-destination";
 import { outboundAckOutcome, safeOutboundRejectionCode, safeOutboundRejectionMessage } from "./lib/whatsapp/outbound-ack";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
@@ -38,6 +38,7 @@ const connecting = new Set<string>();
 const resettingAuth = new Set<string>();
 const accountQueues = new Map<string, Promise<void>>();
 const outboundWorkQueued = new Set<string>();
+const outboundDeferrals = new Map<string, { reason: string; loggedAt: number }>();
 const reconnectAttempts = new Map<string, number>();
 const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const explicitLinking = new Set<string>();
@@ -49,6 +50,7 @@ let scheduledWindowTimer: ReturnType<typeof setTimeout> | undefined;
 let outboundTimer: ReturnType<typeof setInterval> | undefined;
 let mediaTimer: ReturnType<typeof setInterval> | undefined;
 let readReceiptTimer: ReturnType<typeof setInterval> | undefined;
+let staleOutboundTimer: ReturnType<typeof setInterval> | undefined;
 // Baileys can log raw protocol nodes. All production diagnostics go through
 // operationalLog instead, which only emits hashed references and safe fields.
 const baileysLogger = pino({ level: "silent" });
@@ -118,6 +120,8 @@ function startQueueProcessors() {
   outboundTimer = setInterval(() => void processOutbound(), 1_500);
   mediaTimer = setInterval(() => void processPendingMedia(), 10_000);
   readReceiptTimer = setInterval(() => void processReadReceipts(), 2_000);
+  staleOutboundTimer = setInterval(() => void processStaleOutboundRequests(), 60_000);
+  void processStaleOutboundRequests();
 }
 
 function stopQueueProcessorsIfIdle() {
@@ -125,9 +129,11 @@ function stopQueueProcessorsIfIdle() {
   if (outboundTimer) clearInterval(outboundTimer);
   if (mediaTimer) clearInterval(mediaTimer);
   if (readReceiptTimer) clearInterval(readReceiptTimer);
+  if (staleOutboundTimer) clearInterval(staleOutboundTimer);
   outboundTimer = undefined;
   mediaTimer = undefined;
   readReceiptTimer = undefined;
+  staleOutboundTimer = undefined;
 }
 
 function clearScheduledSocketState(accountId: string, socket?: WorkerSocket) {
@@ -417,9 +423,26 @@ function processOutbound() {
   }
 }
 
+function logOutboundDeferral(accountId: string, reason: string) {
+  const previous = outboundDeferrals.get(accountId);
+  const now = Date.now();
+  if (previous?.reason === reason && now - previous.loggedAt < 60_000) return;
+  outboundDeferrals.set(accountId, { reason, loggedAt: now });
+  operationalLog("outbound.deferred", { account: safeLogRef(accountId), reason, phase: "dispatch", status: "PENDING" });
+}
+
+async function processStaleOutboundRequests() {
+  const failed = await failStaleOutboundRequests();
+  if (failed) operationalLog("outbound.confirmation_timed_out", { count: failed, phase: "reconciliation", status: "FAILED" }, "error");
+}
+
 async function processNextOutbound(accountId: string, socket: WorkerSocket) {
   const dispatchSafety = await canDispatchOutbound(accountId);
-  if (!dispatchSafety.allowed) return;
+  if (!dispatchSafety.allowed) {
+    logOutboundDeferral(accountId, dispatchSafety.reason);
+    return;
+  }
+  outboundDeferrals.delete(accountId);
   const request = await claimNextOutboundRequest(accountId);
   if (!request) return;
   const destination = resolveOutboundDestination(request.conversation);
