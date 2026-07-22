@@ -1,16 +1,16 @@
 import { OutboundMessageStatus } from "@prisma/client";
 import { prisma } from "../prisma";
 import { persistMessage } from "./persistence";
-import { OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_CONFIRMATION_TIMEOUT_MS } from "./outbound-confirmation";
+import { MAX_OUTBOUND_ATTEMPTS, OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_CONFIRMATION_TIMEOUT_MS } from "./outbound-confirmation";
 
 export async function claimNextOutboundRequest(accountId: string) {
   const request = await prisma.outboundMessageRequest.findFirst({
-    where: { accountId, status: OutboundMessageStatus.PENDING },
+    where: { accountId, status: OutboundMessageStatus.PENDING, attemptCount: { lt: MAX_OUTBOUND_ATTEMPTS } },
     orderBy: { createdAt: "asc" },
     include: { conversation: { include: { contact: { select: { phone: true } } } } },
   });
   if (!request) return null;
-  const claimed = await prisma.outboundMessageRequest.updateMany({ where: { id: request.id, status: OutboundMessageStatus.PENDING }, data: { status: OutboundMessageStatus.SENDING } });
+  const claimed = await prisma.outboundMessageRequest.updateMany({ where: { id: request.id, status: OutboundMessageStatus.PENDING, attemptCount: { lt: MAX_OUTBOUND_ATTEMPTS } }, data: { status: OutboundMessageStatus.SENDING, attemptCount: { increment: 1 }, lastAttemptAt: new Date(), safeError: null } });
   return claimed.count ? request : null;
 }
 
@@ -45,8 +45,14 @@ export async function completeOutboundRequest(accountId: string, externalId: str
   return true;
 }
 
-export async function failOutboundRequest(id: string, safeError = "No se pudo enviar el mensaje.") {
-  await prisma.outboundMessageRequest.updateMany({ where: { id, status: OutboundMessageStatus.SENDING }, data: { status: OutboundMessageStatus.FAILED, safeError } });
+export async function cancelOutboundRequest(id: string, safeError = "El envío fue cancelado.") {
+  const request = await prisma.outboundMessageRequest.findFirst({ where: { id, status: OutboundMessageStatus.SENDING }, select: { accountId: true, requestedById: true } });
+  if (!request) return false;
+  await prisma.$transaction([
+    prisma.outboundMessageRequest.update({ where: { id }, data: { status: OutboundMessageStatus.CANCELED, safeError } }),
+    prisma.auditLog.create({ data: { accountId: request.accountId, userId: request.requestedById, action: "OUTBOUND_CANCELED", entity: "OutboundMessageRequest", entityId: id } }),
+  ]);
+  return true;
 }
 
 /**
@@ -54,22 +60,22 @@ export async function failOutboundRequest(id: string, safeError = "No se pudo en
  * the encrypted message. Keep the request state truthful when Baileys later
  * reports a delivery error; raw WhatsApp codes are deliberately not exposed.
  */
-export async function failOutboundDelivery(accountId: string, externalId: string, safeError = "WhatsApp no pudo entregar el mensaje.") {
+export async function cancelOutboundDelivery(accountId: string, externalId: string, safeError = "WhatsApp no pudo entregar el mensaje.") {
   const request = await prisma.outboundMessageRequest.findFirst({
     where: { accountId, externalId, status: { in: [OutboundMessageStatus.SENDING, OutboundMessageStatus.SENT] } },
     select: { id: true, requestedById: true },
   });
   if (!request) return;
   await prisma.$transaction([
-    prisma.outboundMessageRequest.update({ where: { id: request.id }, data: { status: OutboundMessageStatus.FAILED, safeError } }),
-    prisma.auditLog.create({ data: { accountId, userId: request.requestedById, action: "OUTBOUND_DELIVERY_REJECTED", entity: "OutboundMessageRequest", entityId: request.id } }),
+    prisma.outboundMessageRequest.update({ where: { id: request.id }, data: { status: OutboundMessageStatus.CANCELED, safeError } }),
+    prisma.auditLog.create({ data: { accountId, userId: request.requestedById, action: "OUTBOUND_DELIVERY_CANCELED", entity: "OutboundMessageRequest", entityId: request.id } }),
   ]);
 }
 
 /**
  * A local relay acceptance is not a delivery confirmation. Do not replay a
  * stale request automatically, because WhatsApp may have delivered it and a
- * retry could duplicate the manual message.
+ * retry could duplicate the manual message. It is cancelled instead.
  */
 export async function failStaleOutboundRequests(now = new Date()) {
   const cutoff = new Date(now.getTime() - OUTBOUND_CONFIRMATION_TIMEOUT_MS);
@@ -82,7 +88,7 @@ export async function failStaleOutboundRequests(now = new Date()) {
   for (const request of stale) {
     const updated = await prisma.outboundMessageRequest.updateMany({
       where: { id: request.id, status: OutboundMessageStatus.SENDING, updatedAt: { lt: cutoff } },
-      data: { status: OutboundMessageStatus.FAILED, safeError: OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE },
+      data: { status: OutboundMessageStatus.CANCELED, safeError: OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE },
     });
     if (!updated.count) continue;
     failed += 1;
@@ -93,4 +99,4 @@ export async function failStaleOutboundRequests(now = new Date()) {
   return failed;
 }
 
-export { OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_CONFIRMATION_TIMEOUT_MS } from "./outbound-confirmation";
+export { MAX_OUTBOUND_ATTEMPTS, OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_CONFIRMATION_TIMEOUT_MS } from "./outbound-confirmation";

@@ -10,7 +10,7 @@ import { auditConnection, updateConnection } from "./lib/whatsapp/connection";
 import { maskPhone, normalizeWhatsAppMessage } from "./lib/whatsapp/normalize";
 import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
-import { attachOutboundExternalId, claimNextOutboundRequest, completeOutboundRequest, failOutboundDelivery, failOutboundRequest, failStaleOutboundRequests, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
+import { attachOutboundExternalId, cancelOutboundDelivery, cancelOutboundRequest, claimNextOutboundRequest, completeOutboundRequest, failStaleOutboundRequests, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
 import { resolveOutboundDestination } from "./lib/whatsapp/outbound-destination";
 import { outboundAckOutcome, safeOutboundRejectionCode, safeOutboundRejectionMessage } from "./lib/whatsapp/outbound-ack";
 import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/media";
@@ -310,7 +310,7 @@ async function connect(accountId: string) {
             const code = safeOutboundRejectionCode(update.update.messageStubParameters) ?? (reachoutRestrictions.get(accountId) ? 463 : undefined);
             operationalLog("outbound.rejected", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "FAILED", code }, "error");
             if (code === 463) await pauseOutboundForRestriction(accountId);
-            await failOutboundDelivery(accountId, externalId, safeOutboundRejectionMessage(code));
+            await cancelOutboundDelivery(accountId, externalId, safeOutboundRejectionMessage(code));
             continue;
           }
           if (outcome === "ACKNOWLEDGED") {
@@ -433,7 +433,7 @@ function logOutboundDeferral(accountId: string, reason: string) {
 
 async function processStaleOutboundRequests() {
   const failed = await failStaleOutboundRequests();
-  if (failed) operationalLog("outbound.confirmation_timed_out", { count: failed, phase: "reconciliation", status: "FAILED" }, "error");
+  if (failed) operationalLog("outbound.confirmation_timed_out", { count: failed, phase: "reconciliation", status: "CANCELED" }, "error");
 }
 
 async function processNextOutbound(accountId: string, socket: WorkerSocket) {
@@ -455,7 +455,7 @@ async function processNextOutbound(accountId: string, socket: WorkerSocket) {
   operationalLog("outbound.claimed", { ...logContext, phase: "claimed", status: "SENDING" });
   if (!destination.jid) {
     operationalLog("outbound.rejected", { ...logContext, phase: "destination_resolved", status: "FAILED" }, "error");
-    await failOutboundRequest(request.id, "No se encontró una identidad válida para el destinatario.");
+    await cancelOutboundRequest(request.id, "No se encontró una identidad válida para el destinatario.");
     return;
   }
   const destinationJid = destination.jid;
@@ -495,7 +495,7 @@ async function processNextOutbound(accountId: string, socket: WorkerSocket) {
       if (request.conversation.type === "DIRECT") try { await refreshContactProfilePicture(accountId, socket, request.conversation.jid); } catch { /* A profile picture must never change the outcome of an accepted relay. */ }
   } catch (error) {
     operationalLog("outbound.rejected", { ...logContext, phase: "relay_started", status: "FAILED", ...safeErrorInfo(error) }, "error");
-    await failOutboundRequest(request.id);
+    await cancelOutboundRequest(request.id, "El envío fue cancelado antes de ser confirmado por WhatsApp.");
   }
 }
 

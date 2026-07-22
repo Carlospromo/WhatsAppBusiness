@@ -28,6 +28,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const cursor = parseCursor(request.nextUrl.searchParams.get("cursor"));
   const results = await prisma.message.findMany({ where: { conversationId: id, accountId: conversation.accountId }, orderBy: [{ sentAt: "desc" }, { id: "desc" }], take: 51, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: { mediaAttachments: { select: { id: true, kind: true, status: true, mimeType: true, sizeBytes: true, width: true, height: true, durationSeconds: true } } } });
   const page = messagesFromNewestPage(results);
+  const pageExternalIds = page.messages.flatMap((message) => "externalId" in message && message.direction === "OUTBOUND" ? [message.externalId] : []);
+  const outboundRequests = pageExternalIds.length
+    ? await prisma.outboundMessageRequest.findMany({ where: { conversationId: id, accountId: conversation.accountId, externalId: { in: pageExternalIds } }, select: { externalId: true, status: true, attemptCount: true } })
+    : [];
+  const outboundByExternalId = new Map(outboundRequests.flatMap((request) => request.externalId ? [[request.externalId, request]] : []));
 
   // Earlier versions updated the conversation preview before message persistence
   // failed. The original full history cannot be reconstructed, but its latest
@@ -43,5 +48,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       sentAt: conversation.lastMessageAt ?? conversation.updatedAt,
     }]
     : page.messages;
-  return NextResponse.json({ conversation: visibleConversation(conversation), messages, nextCursor: page.nextCursor });
+  const visibleMessages = messages.map((message) => {
+    if (message.direction !== "OUTBOUND" || !("externalId" in message)) return message;
+    const request = outboundByExternalId.get(message.externalId);
+    return { ...message, outboundStatus: request?.status ?? "SENT", outboundAttemptCount: request?.attemptCount ?? null };
+  });
+  return NextResponse.json({ conversation: visibleConversation(conversation), messages: visibleMessages, nextCursor: page.nextCursor });
 }

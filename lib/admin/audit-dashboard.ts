@@ -12,7 +12,7 @@ export type AuditSafetyDashboard = {
   generatedAt: string;
   limits: OutboundSafetyLimits;
   accounts: { active: number; connected: number; restricted: number };
-  outbound: { pending: number; sending: number; failedLast24Hours: number; stuckSending: number; acknowledgedLast24Hours: number; rejectedLast24Hours: number };
+  outbound: { pending: number; sending: number; failedLast24Hours: number; canceledLast24Hours: number; stuckSending: number; acknowledgedLast24Hours: number; rejectedLast24Hours: number };
   inbound: { importedLastHour: number; importedLast24Hours: number; lastImportedAt: string | null };
   readReceipts: { failedLast24Hours: number };
   restrictionEventsLast7Days: number;
@@ -30,6 +30,9 @@ export function safetyAlerts(input: Pick<AuditSafetyDashboard, "accounts" | "out
   if (input.outbound.rejectedLast24Hours > 0) {
     alerts.push({ level: "warning", title: "Entregas rechazadas", detail: `${input.outbound.rejectedLast24Hours} envío(s) fueron rechazados por WhatsApp durante las últimas 24 horas.` });
   }
+  if (input.outbound.canceledLast24Hours > 0) {
+    alerts.push({ level: "info", title: "Envíos cancelados", detail: `${input.outbound.canceledLast24Hours} envío(s) se cancelaron de forma segura durante las últimas 24 horas, sin reintento automático.` });
+  }
   if (input.readReceipts.failedLast24Hours > 0) {
     alerts.push({ level: "info", title: "Lecturas pendientes", detail: `${input.readReceipts.failedLast24Hours} recibo(s) de lectura no se pudieron sincronizar en las últimas 24 horas.` });
   }
@@ -46,19 +49,20 @@ export async function getAuditSafetyDashboard(): Promise<AuditSafetyDashboard> {
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1_000);
   const staleSendingBefore = new Date(now.getTime() - 15 * 60 * 1_000);
 
-  const [accounts, outboundByStatus, failedLast24Hours, stuckSending, inboundLastHour, inboundLast24Hours, lastInbound, acknowledgedLast24Hours, rejectedLast24Hours, readReceiptFailures, restrictionEventsLast7Days] = await Promise.all([
+  const [accounts, outboundByStatus, failedLast24Hours, canceledLast24Hours, stuckSending, inboundLastHour, inboundLast24Hours, lastInbound, acknowledgedLast24Hours, rejectedLast24Hours, readReceiptFailures, restrictionEventsLast7Days] = await Promise.all([
     prisma.whatsAppAccount.findMany({
       where: { isActive: true },
       select: { connection: { select: { status: true, outboundPausedAt: true, outboundPauseEndsAt: true } } },
     }),
     prisma.outboundMessageRequest.groupBy({ by: ["status"], _count: { _all: true } }),
     prisma.outboundMessageRequest.count({ where: { status: OutboundMessageStatus.FAILED, updatedAt: { gte: oneDayAgo } } }),
+    prisma.outboundMessageRequest.count({ where: { status: OutboundMessageStatus.CANCELED, updatedAt: { gte: oneDayAgo } } }),
     prisma.outboundMessageRequest.count({ where: { status: OutboundMessageStatus.SENDING, updatedAt: { lt: staleSendingBefore } } }),
     prisma.message.count({ where: { direction: MessageDirection.INBOUND, importedAt: { gte: oneHourAgo } } }),
     prisma.message.count({ where: { direction: MessageDirection.INBOUND, importedAt: { gte: oneDayAgo } } }),
     prisma.message.findFirst({ where: { direction: MessageDirection.INBOUND }, orderBy: { importedAt: "desc" }, select: { importedAt: true } }),
     prisma.auditLog.count({ where: { action: "OUTBOUND_SERVER_ACKNOWLEDGED", createdAt: { gte: oneDayAgo } } }),
-    prisma.auditLog.count({ where: { action: "OUTBOUND_DELIVERY_REJECTED", createdAt: { gte: oneDayAgo } } }),
+    prisma.auditLog.count({ where: { action: { in: ["OUTBOUND_DELIVERY_REJECTED", "OUTBOUND_DELIVERY_CANCELED"] }, createdAt: { gte: oneDayAgo } } }),
     prisma.auditLog.count({ where: { action: "WHATSAPP_READ_RECEIPT_FAILED", createdAt: { gte: oneDayAgo } } }),
     prisma.auditLog.count({ where: { action: "OUTBOUND_RESTRICTION_PAUSED", createdAt: { gte: sevenDaysAgo } } }),
   ]);
@@ -73,6 +77,7 @@ export async function getAuditSafetyDashboard(): Promise<AuditSafetyDashboard> {
       pending: statusCount.get(OutboundMessageStatus.PENDING) ?? 0,
       sending: statusCount.get(OutboundMessageStatus.SENDING) ?? 0,
       failedLast24Hours,
+      canceledLast24Hours,
       stuckSending,
       acknowledgedLast24Hours,
       rejectedLast24Hours,

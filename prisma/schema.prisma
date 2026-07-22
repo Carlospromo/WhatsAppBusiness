@@ -36,6 +36,7 @@ enum OutboundMessageStatus {
   SENDING
   SENT
   FAILED
+  CANCELED
 }
 
 enum ReadReceiptStatus {
@@ -446,6 +447,8 @@ model OutboundMessageRequest {
   requestedById  String
   body           String
   status         OutboundMessageStatus @default(PENDING)
+  attemptCount   Int                   @default(0)
+  lastAttemptAt  DateTime?
   safeError      String?
   externalId     String?
   createdAt      DateTime              @default(now())
@@ -457,6 +460,7 @@ model OutboundMessageRequest {
 
   @@unique([accountId, externalId])
   @@index([accountId, status, createdAt])
+  @@index([accountId, status, lastAttemptAt])
   @@index([conversationId])
 }
 

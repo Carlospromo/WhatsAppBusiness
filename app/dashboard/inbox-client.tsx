@@ -22,7 +22,7 @@ type Conversation = {
   account: Pick<Account, "id" | "name" | "slug">;
 };
 type MediaAttachment = { id: string; kind: "IMAGE" | "AUDIO" | "VIDEO"; status: "PENDING" | "DOWNLOADING" | "STORED" | "RETRYING" | "FAILED" | "REJECTED_LIMIT" | "UNAVAILABLE"; mimeType: string; sizeBytes: number | null; width: number | null; height: number | null; durationSeconds: number | null };
-type Message = { id: string; direction: "INBOUND" | "OUTBOUND"; body: string | null; sentAt: string; messageType: string; mediaAttachments?: MediaAttachment[] };
+type Message = { id: string; direction: "INBOUND" | "OUTBOUND"; body: string | null; sentAt: string; messageType: string; mediaAttachments?: MediaAttachment[]; outboundStatus?: "PENDING" | "SENDING" | "SENT" | "FAILED" | "CANCELED"; outboundAttemptCount?: number | null };
 type ConversationResponse = { conversation: Conversation; messages: Message[]; nextCursor: string | null };
 
 function conversationName(conversation: Pick<Conversation, "contact" | "type">) {
@@ -296,7 +296,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
                       <article className={`max-w-[88%] rounded-2xl px-3 py-2.5 text-sm shadow-sm sm:max-w-[74%] ${outbound ? "rounded-br-md bg-emerald-600 text-white" : "rounded-bl-md bg-white text-slate-800"}`}>
                         {message.mediaAttachments?.map((attachment) => <MediaContent key={attachment.id} attachment={attachment} outbound={outbound} />)}
                         {message.body ? <p className={`${message.mediaAttachments?.length ? "mt-2" : ""} whitespace-pre-wrap break-words leading-relaxed`}>{message.body}</p> : !message.mediaAttachments?.length && <p className="whitespace-pre-wrap break-words leading-relaxed">Mensaje sin texto</p>}
-                        <time className={`mt-1 block text-right text-[10px] ${outbound ? "text-emerald-100" : "text-slate-400"}`}>{formatTime(message.sentAt)}</time>
+                        <div className={`mt-1 flex items-center justify-end gap-1.5 text-[10px] ${outbound ? "text-emerald-100" : "text-slate-400"}`}>{outbound && message.outboundStatus === "SENDING" && <span>Enviando</span>}{outbound && message.outboundStatus === "CANCELED" && <span className="font-medium text-amber-100">Cancelado</span>}{outbound && message.outboundStatus === "FAILED" && <span className="font-medium text-rose-100">Error</span>}{outbound && message.outboundStatus === "SENT" && <span>Enviado</span>}<time>{formatTime(message.sentAt)}</time></div>
                       </article>
                     </div>
                   </div>;
