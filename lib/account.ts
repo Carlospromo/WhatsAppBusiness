@@ -30,3 +30,12 @@ export async function accountsForUser(user: { id: string; role: Role }) {
 export async function conversationForAccount(id: string, accountId: string) {
   return prisma.conversation.findFirst({ where: { id, accountId }, include: { contact: true, account: { select: { id: true, name: true, slug: true } } } });
 }
+
+export async function conversationForUser(user: { id: string; role: Role }, conversationId: string) {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { id: true, accountId: true, assignedToId: true },
+  });
+  if (!conversation || !await canAccessAccount(user, conversation.accountId)) return null;
+  return conversation;
+}

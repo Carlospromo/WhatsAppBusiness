@@ -177,6 +177,9 @@ model WhatsAppConnection {
   maskedPhone String?
   lastError   String?
   relinkRequestId String?
+  outboundPausedAt DateTime?
+  outboundPauseEndsAt DateTime?
+  outboundPauseReason String?
   createdAt   DateTime                 @default(now())
   updatedAt   DateTime                 @updatedAt
   account     WhatsAppAccount          @relation(fields: [accountId], references: [id], onDelete: Cascade)

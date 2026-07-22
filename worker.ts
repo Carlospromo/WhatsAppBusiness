@@ -2,7 +2,7 @@
 /* WhatsApp worker: every account owns an isolated socket and auth directory. */
 import "dotenv/config";
 import { access, mkdir, rm } from "node:fs/promises";
-import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, generateWAMessage, useMultiFileAuthState, WAMessageStatus } from "@whiskeysockets/baileys";
+import makeWASocket, { DisconnectReason, generateWAMessage, useMultiFileAuthState, WAMessageStatus } from "@whiskeysockets/baileys";
 import pino from "pino";
 import { WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "./lib/prisma";
@@ -19,6 +19,8 @@ import { getOutboundMessageForRetry } from "./lib/whatsapp/message-retry";
 import { installDependencySessionLogRedaction } from "./lib/whatsapp/dependency-log-redaction";
 import { TransientPresenceManager } from "./lib/whatsapp/transient-presence";
 import { canOpenSocket, periodicSyncConfig } from "./lib/whatsapp/periodic-sync";
+import { clearGroupMetadataCache, groupMetadataCacheForAccount } from "./lib/whatsapp/group-metadata-cache";
+import { canDispatchOutbound, clearOutboundRestriction, pauseOutboundForRestriction } from "./lib/whatsapp/outbound-safety";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 
 const authRoot = process.env.WA_AUTH_DIR || "/data/wa-auth";
@@ -35,6 +37,7 @@ const sockets = new Map<string, Awaited<ReturnType<typeof makeWASocket>>>();
 const connecting = new Set<string>();
 const resettingAuth = new Set<string>();
 const accountQueues = new Map<string, Promise<void>>();
+const outboundWorkQueued = new Set<string>();
 const reconnectAttempts = new Map<string, number>();
 const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const explicitLinking = new Set<string>();
@@ -172,6 +175,7 @@ async function closeSocket(accountId: string, socket: WorkerSocket) {
   clearScheduledSocketState(accountId, socket);
   if (sockets.get(accountId) === socket) sockets.delete(accountId);
   await presence.dispose(accountId, socket);
+  clearGroupMetadataCache(accountId);
   try {
     await socket.end(undefined);
   } catch {
@@ -239,9 +243,8 @@ async function connect(accountId: string) {
     await mkdir(authPath(accountId), { recursive: true });
     await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTING, qrCode: null, qrExpiresAt: null, lastError: null });
     const { state, saveCreds } = await useMultiFileAuthState(authPath(accountId));
-    const { version } = await fetchLatestBaileysVersion();
+    const groupMetadataCache = groupMetadataCacheForAccount(accountId);
     const activeSocket = makeWASocket({
-      version,
       auth: state,
       logger: baileysLogger,
       printQRInTerminal: false,
@@ -251,6 +254,7 @@ async function connect(accountId: string) {
       // one-minute timeout without affecting real-time messages or sending.
       fireInitQueries: false,
       markOnlineOnConnect: false,
+      cachedGroupMetadata: async (jid) => groupMetadataCache.get(jid),
       // A retry receipt can arrive after the in-memory Baileys cache has been
       // cleared. The persisted manual text is sufficient to rebuild it.
       getMessage: async (key) => getOutboundMessageForRetry(accountId, key.id),
@@ -265,6 +269,14 @@ async function connect(accountId: string) {
     startQueueProcessors();
     operationalLog("connection.socket_created", { account: safeLogRef(accountId) });
     activeSocket.ev.on("creds.update", saveCreds);
+    activeSocket.ev.on("groups.upsert", (groups) => { for (const group of groups) groupMetadataCache.set(group); });
+    activeSocket.ev.on("groups.update", (groups) => {
+      for (const group of groups) {
+        if (!group.id) continue;
+        const cached = groupMetadataCache.get(group.id);
+        if (cached) groupMetadataCache.set({ ...cached, ...group });
+      }
+    });
     activeSocket.ev.on("contacts.upsert", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
     activeSocket.ev.on("contacts.update", (contacts) => void enqueueAccountWork(accountId, async () => { for (const contact of contacts) if (contact.id) await upsertContact(accountId, { jid: contact.id, displayName: contact.name, pushName: contact.notify }); }));
     activeSocket.ev.on("messages.upsert", ({ messages, type }) => {
@@ -282,28 +294,33 @@ async function connect(accountId: string) {
       });
     });
     activeSocket.ev.on("messages.update", (updates) => {
-      for (const update of updates) {
-        const externalId = update.key.id;
-        const status = update.update.status;
-        if (!update.key.fromMe || !externalId || typeof status !== "number") continue;
-        const outcome = outboundAckOutcome(status, WAMessageStatus.ERROR, WAMessageStatus.SERVER_ACK);
-        if (outcome === "REJECTED") {
-          const code = safeOutboundRejectionCode(update.update.messageStubParameters) ?? (reachoutRestrictions.get(accountId) ? 463 : undefined);
-          operationalLog("outbound.rejected", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "FAILED", code }, "error");
-          void failOutboundDelivery(accountId, externalId, safeOutboundRejectionMessage(code)).catch((error) => operationalLog("outbound.delivery_failure_persist_failed", { account: safeLogRef(accountId), message: safeLogRef(externalId), ...safeErrorInfo(error) }, "error"));
-          continue;
+      void enqueueAccountWork(accountId, async () => {
+        for (const update of updates) {
+          const externalId = update.key.id;
+          const status = update.update.status;
+          if (!update.key.fromMe || !externalId || typeof status !== "number") continue;
+          const outcome = outboundAckOutcome(status, WAMessageStatus.ERROR, WAMessageStatus.SERVER_ACK);
+          if (outcome === "REJECTED") {
+            const code = safeOutboundRejectionCode(update.update.messageStubParameters) ?? (reachoutRestrictions.get(accountId) ? 463 : undefined);
+            operationalLog("outbound.rejected", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "FAILED", code }, "error");
+            if (code === 463) await pauseOutboundForRestriction(accountId);
+            await failOutboundDelivery(accountId, externalId, safeOutboundRejectionMessage(code));
+            continue;
+          }
+          if (outcome === "ACKNOWLEDGED") {
+            operationalLog("outbound.ack_received", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "SENT" });
+            await completeOutboundRequest(accountId, externalId);
+          }
         }
-        if (outcome === "ACKNOWLEDGED") {
-          operationalLog("outbound.ack_received", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "SENT" });
-          void completeOutboundRequest(accountId, externalId).catch((error) => operationalLog("outbound.ack_persist_failed", { account: safeLogRef(accountId), message: safeLogRef(externalId), ...safeErrorInfo(error) }, "error"));
-        }
-      }
+      }).catch((error) => operationalLog("outbound.ack_persist_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error"));
     });
     activeSocket.ev.on("connection.update", async ({ connection, lastDisconnect, qr, reachoutTimeLock, receivedPendingNotifications }) => {
       if (sockets.get(accountId) !== activeSocket) return;
       if (reachoutTimeLock) {
         const isActive = reachoutTimeLock.isActive === true;
         reachoutRestrictions.set(accountId, isActive);
+        if (isActive) await pauseOutboundForRestriction(accountId, reachoutTimeLock.timeEnforcementEnds);
+        else await clearOutboundRestriction(accountId);
         operationalLog("outbound.restriction_updated", { account: safeLogRef(accountId), code: 463, active: isActive, phase: "ack_received" }, isActive ? "error" : "info");
       }
       if (receivedPendingNotifications === true) markScheduledPendingNotifications(accountId, activeSocket);
@@ -322,6 +339,7 @@ async function connect(accountId: string) {
       if (connection === "close") {
         sockets.delete(accountId);
         clearScheduledSocketState(accountId, activeSocket);
+        clearGroupMetadataCache(accountId);
         void presence.dispose(accountId, activeSocket);
         stopQueueProcessorsIfIdle();
         if (stopping || !(await isAccountActive(accountId))) return;
@@ -389,26 +407,36 @@ async function syncAccounts(openScheduledSessions = false) {
   }
 }
 
-async function processOutbound() {
+function processOutbound() {
   for (const [accountId, socket] of sockets) {
     if (!socket.user) continue;
-    const request = await claimNextOutboundRequest(accountId);
-    if (!request) continue;
-    const destination = resolveOutboundDestination(request.conversation);
-    const logContext = {
-      account: safeLogRef(accountId),
-      request: safeLogRef(request.id),
-      destination: destination.kind,
-      phoneFallbackPresent: destination.phoneFallbackPresent,
-    };
-    operationalLog("outbound.claimed", { ...logContext, phase: "claimed", status: "SENDING" });
-    if (!destination.jid) {
-      operationalLog("outbound.rejected", { ...logContext, phase: "destination_resolved", status: "FAILED" }, "error");
-      await failOutboundRequest(request.id, "No se encontró una identidad válida para el destinatario.");
-      continue;
-    }
-    const destinationJid = destination.jid;
-    try {
+    if (outboundWorkQueued.has(accountId)) continue;
+    outboundWorkQueued.add(accountId);
+    void enqueueAccountWork(accountId, () => processNextOutbound(accountId, socket))
+      .finally(() => outboundWorkQueued.delete(accountId));
+  }
+}
+
+async function processNextOutbound(accountId: string, socket: WorkerSocket) {
+  const dispatchSafety = await canDispatchOutbound(accountId);
+  if (!dispatchSafety.allowed) return;
+  const request = await claimNextOutboundRequest(accountId);
+  if (!request) return;
+  const destination = resolveOutboundDestination(request.conversation);
+  const logContext = {
+    account: safeLogRef(accountId),
+    request: safeLogRef(request.id),
+    destination: destination.kind,
+    phoneFallbackPresent: destination.phoneFallbackPresent,
+  };
+  operationalLog("outbound.claimed", { ...logContext, phase: "claimed", status: "SENDING" });
+  if (!destination.jid) {
+    operationalLog("outbound.rejected", { ...logContext, phase: "destination_resolved", status: "FAILED" }, "error");
+    await failOutboundRequest(request.id, "No se encontró una identidad válida para el destinatario.");
+    return;
+  }
+  const destinationJid = destination.jid;
+  try {
       operationalLog("outbound.destination_resolved", { ...logContext, phase: "destination_resolved", status: "SENDING" });
       operationalLog("outbound.relay_started", { ...logContext, phase: "relay_started", status: "SENDING" });
       // Refresh the device list for this one explicit manual send. It avoids
@@ -416,6 +444,9 @@ async function processOutbound() {
       // a recipient device change; it is not a contact discovery operation.
       let externalId: string | null | undefined;
       await presence.duringActivity(accountId, socket, async () => {
+        if (destination.kind === "group" && !await groupMetadataCacheForAccount(accountId).ensure(socket, destinationJid)) {
+          throw new Error("group metadata unavailable");
+        }
         const sent = await generateWAMessage(destinationJid, { text: request.body }, {
           userJid: socket.user!.id,
           logger: baileysLogger,
@@ -439,10 +470,9 @@ async function processOutbound() {
       const relayStillPending = await recordOutboundRelayAccepted(request, externalId, destinationJid);
       operationalLog("outbound.persisted", { ...logContext, message: safeLogRef(externalId), phase: "persisted", status: relayStillPending ? "SENDING" : "FAILED" });
       if (request.conversation.type === "DIRECT") try { await refreshContactProfilePicture(accountId, socket, request.conversation.jid); } catch { /* A profile picture must never change the outcome of an accepted relay. */ }
-    } catch (error) {
-      operationalLog("outbound.rejected", { ...logContext, phase: "relay_started", status: "FAILED", ...safeErrorInfo(error) }, "error");
-      await failOutboundRequest(request.id);
-    }
+  } catch (error) {
+    operationalLog("outbound.rejected", { ...logContext, phase: "relay_started", status: "FAILED", ...safeErrorInfo(error) }, "error");
+    await failOutboundRequest(request.id);
   }
 }
 

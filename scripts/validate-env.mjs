@@ -32,6 +32,12 @@ const connectionMode = process.env.WA_CONNECTION_MODE || "continuous";
 if (connectionMode !== "continuous" && connectionMode !== "periodic") throw new Error("WA_CONNECTION_MODE debe ser continuous o periodic.");
 optionalSeconds("WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
 optionalSeconds("WA_LINK_WINDOW_SECONDS", 120, 30, 600);
+for (const [name, fallback, minimum, maximum] of [
+  ["WA_OUTBOUND_MAX_PENDING", 20, 1, 500],
+  ["WA_OUTBOUND_MAX_PER_MINUTE", 6, 1, 60],
+  ["WA_OUTBOUND_MIN_INTERVAL_SECONDS", 5, 1, 300],
+  ["WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY", 10, 1, 100],
+]) optionalSeconds(name, fallback, minimum, maximum);
 if (connectionMode === "periodic") {
   const syncInterval = optionalSeconds("WA_SYNC_INTERVAL_SECONDS", 300, 60, 86_400);
   const syncWindow = optionalSeconds("WA_SYNC_WINDOW_SECONDS", 45, 10, 900);

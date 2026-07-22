@@ -6,9 +6,9 @@ import { prisma } from "@/lib/prisma";
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser(); if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ error: "Prohibido" }, { status: 403 });
-  const { id } = await params; const account = await prisma.whatsAppAccount.findUnique({ where: { id }, include: { connection: { select: { status: true, maskedPhone: true, updatedAt: true, qrCode: true, qrExpiresAt: true } } } });
+  const { id } = await params; const account = await prisma.whatsAppAccount.findUnique({ where: { id }, include: { connection: { select: { status: true, maskedPhone: true, updatedAt: true, qrCode: true, qrExpiresAt: true, outboundPausedAt: true, outboundPauseEndsAt: true } } } });
   if (!account) return NextResponse.json({ error: "No encontrada" }, { status: 404 });
-  return NextResponse.json({ isActive: account.isActive, status: account.connection?.status ?? "DISCONNECTED", maskedPhone: account.connection?.maskedPhone ?? null, hasQr: Boolean(account.connection?.qrCode && account.connection.qrExpiresAt && account.connection.qrExpiresAt > new Date()), updatedAt: account.connection?.updatedAt ?? null });
+  return NextResponse.json({ isActive: account.isActive, status: account.connection?.status ?? "DISCONNECTED", maskedPhone: account.connection?.maskedPhone ?? null, hasQr: Boolean(account.connection?.qrCode && account.connection.qrExpiresAt && account.connection.qrExpiresAt > new Date()), updatedAt: account.connection?.updatedAt ?? null, outboundRestricted: Boolean(account.connection?.outboundPausedAt && (!account.connection.outboundPauseEndsAt || account.connection.outboundPauseEndsAt > new Date())) });
 }
 
 export async function POST(_: Request, { params }: { params: Promise<{ id: string }> }) {
