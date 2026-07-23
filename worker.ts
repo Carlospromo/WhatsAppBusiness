@@ -22,6 +22,13 @@ import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log
 const { Client, LocalAuth, MessageAck } = whatsappWeb;
 const authRoot = process.env.WA_WEB_AUTH_DIR || "/data/wwebjs-auth";
 const readyTimeoutMs = Math.max(30_000, Number(process.env.WA_WEB_CLIENT_READY_TIMEOUT_SECONDS ?? 120) * 1_000);
+// `authenticated` is deliberately emitted by whatsapp-web.js before it injects
+// its public page helpers and emits `ready`. Do not call public chat APIs in
+// that interval: on some current WhatsApp Web builds that races the injector.
+const readinessProbeDelayMs = Math.min(
+  Math.max(5_000, Number(process.env.WA_WEB_READY_PROBE_DELAY_SECONDS ?? 25) * 1_000),
+  Math.max(5_000, readyTimeoutMs - 5_000),
+);
 const accountCheckMs = Math.max(5_000, Number(process.env.WA_ACCOUNT_CHECK_SECONDS ?? 15) * 1_000);
 const inboundReconcileMs = Math.max(10_000, Number(process.env.WA_WEB_INBOUND_RECONCILE_SECONDS ?? 30) * 1_000);
 const inboundReconcileLimit = Math.max(1, Math.min(100, Number(process.env.WA_WEB_INBOUND_RECONCILE_LIMIT ?? 25)));
@@ -86,7 +93,9 @@ function attachBrowserDiagnostics(accountId: string, client: WhatsAppWebClient) 
   page.on("error", (error) => operationalLog("connection.browser_error", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error"));
   page.on("console", (message) => {
     const type = message.type();
-    if (type === "error" || type === "warn") operationalLog("connection.browser_console", { account: safeLogRef(accountId), consoleType: type }, "debug");
+    // Browser output can contain chat data. Keep only a one-way fingerprint so
+    // a recurring injector failure is diagnosable in Railway without leaking it.
+    if (type === "error" || type === "warn") operationalLog("connection.browser_console", { account: safeLogRef(accountId), consoleType: type, consoleFingerprint: safeLogRef(message.text()) }, "error");
   });
 }
 
@@ -162,11 +171,21 @@ function schedulePostReadyMaintenance(accountId: string, client: WhatsAppWebClie
 function startReadinessProbe(accountId: string, client: WhatsAppWebClient) {
   clearReadinessProbe(accountId);
   let attempts = 0;
+  let webVersionLogged = false;
   const probe = () => void enqueueAccountWork(accountId, async () => {
     if (clients.get(accountId) !== client || readyAccounts.has(accountId) || !authenticatedAccounts.has(accountId)) return clearReadinessProbe(accountId);
     attempts += 1;
     try {
       attachBrowserDiagnostics(accountId, client);
+      if (!webVersionLogged) {
+        webVersionLogged = true;
+        try {
+          const version = await client.getWWebVersion();
+          operationalLog("connection.web_version", { account: safeLogRef(accountId), version: typeof version === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(version) ? version : "unknown" });
+        } catch (error) {
+          operationalLog("connection.web_version_unavailable", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "debug");
+        }
+      }
       const state = safeConnectionState(await client.getState());
       operationalLog("connection.state_probe", { account: safeLogRef(accountId), state, attempt: attempts }, attempts === 1 || attempts % 6 === 0 ? "info" : "debug");
       if (state === "CONNECTED") {
@@ -181,8 +200,16 @@ function startReadinessProbe(accountId: string, client: WhatsAppWebClient) {
       );
     }
   });
-  probe();
-  readinessProbeTimers.set(accountId, setInterval(probe, 5_000));
+  // whatsapp-web.js emits `authenticated` before LoadUtils and its event
+  // listeners are installed. Leave that documented initialization path alone
+  // first; this is solely a delayed compatibility fallback when `ready` never
+  // arrives. It is intentionally not a recurring WhatsApp sync.
+  operationalLog("connection.readiness_probe_scheduled", { account: safeLogRef(accountId), delayMs: readinessProbeDelayMs }, "debug");
+  readinessProbeTimers.set(accountId, setTimeout(() => {
+    readinessProbeTimers.delete(accountId);
+    probe();
+    readinessProbeTimers.set(accountId, setInterval(probe, 5_000));
+  }, readinessProbeDelayMs));
 }
 
 function waitForReady(accountId: string, client: WhatsAppWebClient) {
@@ -335,6 +362,11 @@ async function connect(accountId: string) {
       takeoverOnConflict: false,
       deviceName: "WhatsAppBusiness",
       browserName: "Chrome",
+      // Do not persist a captured WhatsApp Web HTML document inside the
+      // container. A stale cached build can keep a known injector defect alive
+      // across worker restarts. Chromium still retains only the authenticated
+      // LocalAuth profile under /data/wwebjs-auth.
+      webVersionCache: { type: "none" },
       puppeteer: {
         headless: true,
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,

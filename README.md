@@ -10,11 +10,11 @@ El worker usa [`whatsapp-web.js`](https://github.com/wwebjs/whatsapp-web.js) fij
 
 La recepción fiable requiere mantener el cliente conectado. Cuando el cliente queda listo, el worker solicita presencia no disponible; esto no garantiza cómo WhatsApp mostrará la presencia a terceros.
 
-La conexión se confirma normalmente con el evento `ready`. Como medida de compatibilidad para versiones de WhatsApp Web que emiten `authenticated` pero no `ready`, el worker consulta el estado público del cliente y verifica además que `getChats()` funciona antes de habilitar la cuenta. Si el navegador no puede leer sus chats, la cuenta no se declara conectada.
+La conexión se confirma normalmente con el evento `ready`. Como medida de compatibilidad para versiones de WhatsApp Web que emiten `authenticated` pero no `ready`, el worker espera primero a que `whatsapp-web.js` instale sus APIs públicas y solo entonces consulta el estado del cliente y verifica que `getChats()` funciona antes de habilitar la cuenta. Si el navegador no puede leer sus chats, la cuenta no se declara conectada.
 
 La recepción usa primero los eventos públicos `message` y `message_create`. Como respaldo controlado, revisa periódicamente solo los chats cuya actividad cambió después de conectar y obtiene un máximo acotado de mensajes recientes por chat. PostgreSQL deduplica por cuenta e identificador externo. No se ejecuta una importación completa de historial ni se comprueban números de teléfono.
 
-Si la sesión del navegador no expone `getChats()` dentro del plazo de inicio, la cuenta queda en error y el worker se reinicia con *backoff*, conservando el perfil `LocalAuth`. No se muestra como conectada de forma engañosa. Los logs incluyen una categoría y una huella irreversible del error para correlacionar fallos sin revelar datos de WhatsApp.
+El worker no persiste una copia local del HTML de WhatsApp Web: así evita reutilizar tras un reinicio una versión de página que haya resultado incompatible con el inyector de la librería. Solo persiste el perfil `LocalAuth` dentro del volumen. Si la sesión del navegador no expone `getChats()` dentro del plazo de inicio, la cuenta queda en error y el worker se reinicia con *backoff*, conservando ese perfil. No se muestra como conectada de forma engañosa. Los logs incluyen categorías y huellas irreversibles de errores de navegador para correlacionar fallos sin revelar datos de WhatsApp.
 
 ## Funciones
 
@@ -71,6 +71,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `PUPPETEER_EXECUTABLE_PATH` | En la imagen: `/usr/bin/chromium`. |
 | `PUPPETEER_NO_SANDBOX` | `true` dentro de Railway porque su runtime bloquea los *namespaces* del sandbox de Chromium; en local debe permanecer `false` salvo necesidad equivalente. |
 | `WA_WEB_CLIENT_READY_TIMEOUT_SECONDS` | Tiempo máximo de inicio del cliente (30–600). |
+| `WA_WEB_READY_PROBE_DELAY_SECONDS` | Espera antes del sondeo de compatibilidad tras `authenticated` (5–90; predeterminado 25). No es un intervalo de sincronización. |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
 | `WA_WEB_INBOUND_RECONCILE_SECONDS` | Respaldo de entradas con APIs públicas del navegador (10–300; predeterminado 30). |
 | `WA_WEB_INBOUND_RECONCILE_LIMIT` | Máximo de mensajes recientes por chat cambiado en cada ciclo (1–100; predeterminado 25). |
