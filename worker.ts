@@ -24,12 +24,14 @@ const readyTimeoutMs = Math.max(30_000, Number(process.env.WA_WEB_CLIENT_READY_T
 const accountCheckMs = Math.max(5_000, Number(process.env.WA_ACCOUNT_CHECK_SECONDS ?? 15) * 1_000);
 const clients = new Map<string, WhatsAppWebClient>();
 const readyAccounts = new Set<string>();
+const authenticatedAccounts = new Set<string>();
 const connecting = new Set<string>();
 const accountQueues = new Map<string, Promise<void>>();
 const outboundWorkQueued = new Set<string>();
 const outboundDeferrals = new Map<string, { reason: string; loggedAt: number }>();
 const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const reconnectAttempts = new Map<string, number>();
+const readyTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let stopping = false;
 let outboundTimer: ReturnType<typeof setInterval> | undefined;
 let mediaTimer: ReturnType<typeof setInterval> | undefined;
@@ -49,6 +51,28 @@ function chromiumArgs() {
   // This flag is opt-in, documented and only enabled by the production image.
   if (process.env.PUPPETEER_NO_SANDBOX === "true") args.push("--no-sandbox", "--disable-setuid-sandbox");
   return args;
+}
+
+function clearReadyTimer(accountId: string) {
+  const timer = readyTimers.get(accountId);
+  if (timer) clearTimeout(timer);
+  readyTimers.delete(accountId);
+}
+
+function waitForReady(accountId: string, client: WhatsAppWebClient) {
+  clearReadyTimer(accountId);
+  readyTimers.set(accountId, setTimeout(() => void enqueueAccountWork(accountId, async () => {
+    readyTimers.delete(accountId);
+    if (clients.get(accountId) !== client || readyAccounts.has(accountId)) return;
+    await updateConnection(accountId, {
+      status: WhatsAppConnectionStatus.ERROR,
+      qrCode: null,
+      qrExpiresAt: null,
+      lastError: "La vinculación fue aceptada, pero WhatsApp Web no terminó de iniciar. Revisa los logs del worker y vuelve a intentarlo si persiste.",
+      bridgeType: WhatsAppBridgeType.WWEBJS,
+    });
+    operationalLog("connection.ready_timeout", { account: safeLogRef(accountId) }, "error");
+  }), readyTimeoutMs));
 }
 
 function enqueueAccountWork(accountId: string, work: () => Promise<void>) {
@@ -98,9 +122,16 @@ function scheduleReconnect(accountId: string) {
 
 async function closeClient(accountId: string, client?: WhatsAppWebClient) {
   const active = client ?? clients.get(accountId);
-  if (!active) return;
+  if (!active) {
+    readyAccounts.delete(accountId);
+    authenticatedAccounts.delete(accountId);
+    clearReadyTimer(accountId);
+    return;
+  }
   if (clients.get(accountId) === active) clients.delete(accountId);
   readyAccounts.delete(accountId);
+  authenticatedAccounts.delete(accountId);
+  clearReadyTimer(accountId);
   await presence.dispose(accountId, active);
   try { await active.destroy(); } catch { /* Browser can already be gone. */ }
   stopQueueProcessorsIfIdle();
@@ -155,17 +186,25 @@ async function connect(accountId: string) {
     const activeClient = client;
     activeClient.on("qr", (qr) => void enqueueAccountWork(accountId, async () => {
       if (clients.get(accountId) !== activeClient) return;
+      if (authenticatedAccounts.has(accountId)) {
+        operationalLog("connection.qr_ignored_after_authentication", { account: safeLogRef(accountId) }, "debug");
+        return;
+      }
       await updateConnection(accountId, { status: WhatsAppConnectionStatus.WAITING_FOR_QR, qrCode: qr, qrExpiresAt: new Date(Date.now() + 60_000), bridgeType: WhatsAppBridgeType.WWEBJS });
       await auditConnection(accountId, "WHATSAPP_QR_AVAILABLE");
       operationalLog("connection.qr_available", { account: safeLogRef(accountId) });
     }));
     activeClient.on("authenticated", () => void enqueueAccountWork(accountId, async () => {
+      if (clients.get(accountId) !== activeClient) return;
+      authenticatedAccounts.add(accountId);
+      await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTING, qrCode: null, qrExpiresAt: null, lastError: null, bridgeType: WhatsAppBridgeType.WWEBJS });
       await auditConnection(accountId, "WHATSAPP_AUTHENTICATED");
       operationalLog("connection.authenticated", { account: safeLogRef(accountId) });
+      waitForReady(accountId, activeClient);
     }));
     activeClient.on("ready", () => void enqueueAccountWork(accountId, async () => {
       if (clients.get(accountId) !== activeClient || !(await isAccountActive(accountId))) return;
-      readyAccounts.add(accountId); resetReconnectDelay(accountId);
+      readyAccounts.add(accountId); clearReadyTimer(accountId); resetReconnectDelay(accountId);
       const accountIdFromClient = activeClient.info?.wid?._serialized ?? null;
       await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: accountIdFromClient, maskedPhone: maskPhone(accountIdFromClient), lastError: null, bridgeType: WhatsAppBridgeType.WWEBJS });
       await auditConnection(accountId, "WHATSAPP_CONNECTED");
@@ -175,6 +214,10 @@ async function connect(accountId: string) {
       await refreshRecentContactProfilePictures(accountId, activeClient);
       await recoverPendingMedia(accountId, activeClient);
     }));
+    activeClient.on("change_state", (state: string) => {
+      const safeState = /^[A-Z_]{1,64}$/.test(state) ? state : "UNKNOWN";
+      operationalLog("connection.state_changed", { account: safeLogRef(accountId), state: safeState }, "debug");
+    });
     activeClient.on("auth_failure", () => void enqueueAccountWork(accountId, async () => {
       await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "No se pudo autenticar la sesión de WhatsApp Web.", bridgeType: WhatsAppBridgeType.WWEBJS });
       await auditConnection(accountId, "WHATSAPP_AUTH_FAILURE");
@@ -246,7 +289,7 @@ async function syncAccounts() {
     const status = account.connection?.status;
     // Existing records intentionally do not generate a Web QR until an
     // administrator requests a relink. Linked browser sessions reconnect.
-    if (account.connection?.bridgeType === WhatsAppBridgeType.BAILEYS_LEGACY || !status || status === WhatsAppConnectionStatus.DISCONNECTED || status === WhatsAppConnectionStatus.WAITING_FOR_QR) continue;
+    if (account.connection?.bridgeType === WhatsAppBridgeType.BAILEYS_LEGACY || !status || status === WhatsAppConnectionStatus.DISCONNECTED) continue;
     if (!clients.has(account.id) && (await hasProfile(account.id))) void connect(account.id);
   }
   for (const [accountId, client] of clients) if (!allowed.has(accountId)) await closeClient(accountId, client);
