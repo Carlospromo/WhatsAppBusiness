@@ -16,7 +16,6 @@ coverage/
 *.sqlite3
 /data/
 /auth_store/
-/wa-auth/
 
 # Logs and operating system files
 *.log

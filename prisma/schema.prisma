@@ -22,7 +22,6 @@ enum WhatsAppConnectionStatus {
 }
 
 enum WhatsAppBridgeType {
-  BAILEYS_LEGACY
   WWEBJS
 }
 
@@ -418,7 +417,7 @@ model HistoryRecoveryRequest {
   anchorExternalId String
   anchorSentAt     DateTime
   anchorFromMe     Boolean               @default(false)
-  bridgeRequestId  String?                @map("baileysRequestId")
+  bridgeRequestId  String?
   pageCount        Int                   @default(0)
   receivedCount    Int                   @default(0)
   importedCount    Int                   @default(0)
