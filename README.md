@@ -67,7 +67,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `PUPPETEER_NO_SANDBOX` | `true` dentro de Railway porque su runtime bloquea los *namespaces* del sandbox de Chromium; en local debe permanecer `false` salvo necesidad equivalente. |
 | `WA_WEB_CLIENT_READY_TIMEOUT_SECONDS` | Tiempo máximo de inicio del cliente (30–600). |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
-| `WA_WEB_MAX_MEDIA_BYTES`, `WA_WEB_MAX_IMAGE_BYTES`, `WA_WEB_MAX_AUDIO_BYTES`, `WA_WEB_MAX_VIDEO_BYTES` | Límite global y límites conservadores por tipo para medios Base64 descargados por el cliente web. |
+| `WA_WEB_MAX_MEDIA_BYTES`, `WA_WEB_MAX_IMAGE_BYTES`, `WA_WEB_MAX_AUDIO_BYTES`, `WA_WEB_MAX_VIDEO_BYTES` | Límites opcionales: global y por tipo para medios Base64. Si se omiten, se usan 25 MB globales, 10 MB para imágenes, 20 MB para audio y 25 MB para vídeo. |
 | `WA_OUTBOUND_MAX_PENDING`, `WA_OUTBOUND_MAX_PER_MINUTE`, `WA_OUTBOUND_MIN_INTERVAL_SECONDS`, `WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY` | Límites preventivos de envío manual. |
 | `MEDIA_STORAGE=r2`, `R2_BUCKET`, `R2_ACCOUNT_ID`, `R2_ENDPOINT`, `R2_REGION`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Bucket R2 privado para medios. |
 | `LOG_LEVEL` | Nivel de logs de aplicación. |

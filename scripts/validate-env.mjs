@@ -5,7 +5,7 @@ if (process.env.AUTH_SECRET.length < 32) throw new Error("AUTH_SECRET debe conte
 if (process.env.NODE_ENV === "production" && !process.env.WA_WEB_AUTH_DIR.startsWith("/data/")) throw new Error("WA_WEB_AUTH_DIR debe estar dentro del volumen persistente /data en producciÃ³n.");
 if (process.env.PUPPETEER_NO_SANDBOX && !["true", "false"].includes(process.env.PUPPETEER_NO_SANDBOX)) throw new Error("PUPPETEER_NO_SANDBOX debe ser true o false.");
 
-const mediaRequired = ["MEDIA_STORAGE", "R2_BUCKET", "R2_ACCOUNT_ID", "R2_ENDPOINT", "R2_REGION", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "WA_WEB_MAX_MEDIA_BYTES", "WA_WEB_MAX_IMAGE_BYTES", "WA_WEB_MAX_AUDIO_BYTES", "WA_WEB_MAX_VIDEO_BYTES"];
+const mediaRequired = ["MEDIA_STORAGE", "R2_BUCKET", "R2_ACCOUNT_ID", "R2_ENDPOINT", "R2_REGION", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"];
 const missingMedia = mediaRequired.filter((name) => !process.env[name]);
 if (missingMedia.length) throw new Error(`Faltan variables de medios requeridas: ${missingMedia.join(", ")}`);
 if (process.env.MEDIA_STORAGE !== "r2") throw new Error("MEDIA_STORAGE debe ser r2.");
@@ -22,7 +22,10 @@ function positiveInteger(name, fallback, minimum, maximum) {
 
 positiveInteger("WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
 positiveInteger("WA_WEB_CLIENT_READY_TIMEOUT_SECONDS", 120, 30, 600);
-for (const name of ["WA_WEB_MAX_MEDIA_BYTES", "WA_WEB_MAX_IMAGE_BYTES", "WA_WEB_MAX_AUDIO_BYTES", "WA_WEB_MAX_VIDEO_BYTES"]) positiveInteger(name, 1, 1, 40 * 1024 * 1024);
+positiveInteger("WA_WEB_MAX_MEDIA_BYTES", 25 * 1024 * 1024, 1, 40 * 1024 * 1024);
+positiveInteger("WA_WEB_MAX_IMAGE_BYTES", 10 * 1024 * 1024, 1, 40 * 1024 * 1024);
+positiveInteger("WA_WEB_MAX_AUDIO_BYTES", 20 * 1024 * 1024, 1, 40 * 1024 * 1024);
+positiveInteger("WA_WEB_MAX_VIDEO_BYTES", 25 * 1024 * 1024, 1, 40 * 1024 * 1024);
 for (const [name, fallback, minimum, maximum] of [
   ["WA_OUTBOUND_MAX_PENDING", 20, 1, 500],
   ["WA_OUTBOUND_MAX_PER_MINUTE", 6, 1, 60],
