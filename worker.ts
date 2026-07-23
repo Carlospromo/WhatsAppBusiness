@@ -229,6 +229,25 @@ async function contactFromMessage(accountId: string, message: Message) {
   }
 }
 
+async function persistInboundMessageEvent(accountId: string, client: WhatsAppWebClient, raw: Message, source: "message" | "message_create") {
+  const eventExternalId = raw.id?._serialized ?? raw.id?.id ?? "unknown";
+  const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
+  operationalLog("inbound.event_received", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), messageType: eventType, source });
+  const message = normalizeWebMessage(raw as unknown as WebMessageLike);
+  if (!message || message.direction !== "INBOUND") {
+    operationalLog("inbound.event_ignored", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), reason: "unsupported_or_outbound", source }, "debug");
+    return;
+  }
+  await contactFromMessage(accountId, raw);
+  const persisted = await presence.duringActivity(accountId, client, () => persistMessage(accountId, message));
+  // Both public events can be emitted for the same inbound message. Only the
+  // creator owns its media transfer and contact refresh; PostgreSQL enforces
+  // the message-level deduplication for all subsequent events.
+  if (persisted.created && persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, client, raw);
+  if (persisted.created && message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, client, message.conversationJid);
+  operationalLog("inbound.persisted", { account: safeLogRef(accountId), message: safeLogRef(message.externalId), created: persisted.created, source });
+}
+
 async function syncKnownContacts(accountId: string, client: WhatsAppWebClient) {
   try {
     const contacts = await client.getContacts();
@@ -317,23 +336,10 @@ async function connect(accountId: string) {
       const chatId = contact.id?._serialized;
       if (chatId) await upsertContact(accountId, { chatId, displayName: contact.name ?? contact.shortName ?? null, pushName: contact.pushname ?? null });
     }));
-    activeClient.on("message", (raw: Message) => void enqueueAccountWork(accountId, async () => {
-      const eventExternalId = raw.id?._serialized ?? raw.id?.id ?? "unknown";
-      const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
-      operationalLog("inbound.event_received", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), messageType: eventType });
-      const message = normalizeWebMessage(raw as unknown as WebMessageLike);
-      if (!message || message.direction !== "INBOUND") {
-        operationalLog("inbound.event_ignored", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), reason: "unsupported_or_outbound" }, "debug");
-        return;
-      }
-      await contactFromMessage(accountId, raw);
-      const persisted = await presence.duringActivity(accountId, activeClient, () => persistMessage(accountId, message));
-      if (persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, activeClient, raw);
-      if (message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, activeClient, message.conversationJid);
-      operationalLog("inbound.persisted", { account: safeLogRef(accountId), message: safeLogRef(message.externalId), created: persisted.created });
-    }));
+    activeClient.on("message", (raw: Message) => void enqueueAccountWork(accountId, () => persistInboundMessageEvent(accountId, activeClient, raw, "message")));
     activeClient.on("message_create", (raw: Message) => void enqueueAccountWork(accountId, async () => {
       const message = normalizeWebMessage(raw as unknown as WebMessageLike);
+      if (message?.direction === "INBOUND") return persistInboundMessageEvent(accountId, activeClient, raw, "message_create");
       if (!message || message.direction !== "OUTBOUND") return;
       await persistMessage(accountId, message);
     }));
@@ -351,6 +357,14 @@ async function connect(accountId: string) {
     }));
     await activeClient.initialize();
   } catch (error) {
+    // whatsapp-web.js can report a late ready/injection failure after the
+    // underlying browser has authenticated and getState() is CONNECTED. Do
+    // not destroy that live client: doing so turns a recoverable session into
+    // a repeated reconnect loop. Its public message events remain attached.
+    if (client && clients.get(accountId) === client && readyAccounts.has(accountId)) {
+      operationalLog("connection.initialize_error_after_state_recovery", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error");
+      return;
+    }
     if (client) await closeClient(accountId, client);
     operationalLog("connection.start_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error");
     if (!stopping && await isAccountActive(accountId)) {

@@ -10,6 +10,6 @@ describe("operational log privacy", () => {
   });
 
   it("keeps only safe transport metadata from errors", () => {
-    expect(safeErrorInfo({ name: "Boom", code: "ECONNRESET", message: "contains a phone 34600000000", output: { statusCode: 408 } })).toEqual({ errorType: "Boom", errorCode: "ECONNRESET", statusCode: 408 });
+    expect(safeErrorInfo({ name: "Boom", code: "ECONNRESET", message: "contains a phone 34600000000", output: { statusCode: 408 } })).toEqual({ errorType: "Boom", errorCode: "ECONNRESET", statusCode: 408, errorCategory: undefined });
   });
 });
