@@ -87,7 +87,7 @@ R2 debe permanecer privado: no actives `r2.dev`, dominio público ni credenciale
 4. Despliega una sola réplica. Next.js y el worker comparten el mismo contenedor y el mismo volumen.
 5. Configura `/api/health` como healthcheck público.
 
-La imagen está basada en `node:22-bookworm-slim`, instala Chromium de Debian y ejecuta Next.js y el worker como un usuario sin privilegios. El entrypoint prepara solo `/data/wwebjs-auth` para ese usuario; no modifica `/data/wa-auth`. No se inicia Chromium, no se aplican migraciones y no se escribe en `/data` durante el build.
+La imagen está basada en `node:22-bookworm-slim`, instala Chromium y `chromium-sandbox` de Debian y ejecuta Next.js y el worker como un usuario sin privilegios. El entrypoint prepara solo `/data/wwebjs-auth` para ese usuario; no modifica `/data/wa-auth`. No se inicia Chromium, no se aplican migraciones y no se escribe en `/data` durante el build.
 
 Railway debe permitir el sandbox de Chromium. Solo si la plataforma exige lo contrario se debe evaluar `--no-sandbox` y documentar el impacto; no está habilitado por defecto.
 
