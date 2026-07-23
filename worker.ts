@@ -43,6 +43,13 @@ const presence = new TransientPresenceManager(3_000, (accountId, error) => {
 function clientId(accountId: string) { return accountId.replace(/[^a-zA-Z0-9_-]/g, "_"); }
 function profilePath(accountId: string) { return join(authRoot, `session-${clientId(accountId)}`); }
 function hasProfile(accountId: string) { return access(profilePath(accountId)).then(() => true).catch(() => false); }
+function chromiumArgs() {
+  const args = ["--disable-dev-shm-usage", "--disable-gpu"];
+  // Railway's container runtime does not permit Chromium's namespace sandbox.
+  // This flag is opt-in, documented and only enabled by the production image.
+  if (process.env.PUPPETEER_NO_SANDBOX === "true") args.push("--no-sandbox", "--disable-setuid-sandbox");
+  return args;
+}
 
 function enqueueAccountWork(accountId: string, work: () => Promise<void>) {
   const previous = accountQueues.get(accountId) ?? Promise.resolve();
@@ -139,7 +146,7 @@ async function connect(accountId: string) {
       puppeteer: {
         headless: true,
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: ["--disable-dev-shm-usage", "--disable-gpu"],
+        args: chromiumArgs(),
       },
     });
     clients.set(accountId, client);

@@ -64,6 +64,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_NAME` | Administrador inicial del seed idempotente. |
 | `WA_WEB_AUTH_DIR` | En Railway: `/data/wwebjs-auth`. |
 | `PUPPETEER_EXECUTABLE_PATH` | En la imagen: `/usr/bin/chromium`. |
+| `PUPPETEER_NO_SANDBOX` | `true` dentro de Railway porque su runtime bloquea los *namespaces* del sandbox de Chromium; en local debe permanecer `false` salvo necesidad equivalente. |
 | `WA_WEB_CLIENT_READY_TIMEOUT_SECONDS` | Tiempo máximo de inicio del cliente (30–600). |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
 | `WA_WEB_MAX_MEDIA_BYTES`, `WA_WEB_MAX_IMAGE_BYTES`, `WA_WEB_MAX_AUDIO_BYTES`, `WA_WEB_MAX_VIDEO_BYTES` | Límite global y límites conservadores por tipo para medios Base64 descargados por el cliente web. |
@@ -89,7 +90,7 @@ R2 debe permanecer privado: no actives `r2.dev`, dominio público ni credenciale
 
 La imagen está basada en `node:22-bookworm-slim`, instala Chromium y `chromium-sandbox` de Debian y ejecuta Next.js y el worker como un usuario sin privilegios. El entrypoint prepara solo `/data/wwebjs-auth` para ese usuario; no modifica `/data/wa-auth`. No se inicia Chromium, no se aplican migraciones y no se escribe en `/data` durante el build.
 
-Railway debe permitir el sandbox de Chromium. Solo si la plataforma exige lo contrario se debe evaluar `--no-sandbox` y documentar el impacto; no está habilitado por defecto.
+El runtime de Railway bloquea los *namespaces* que necesita el sandbox de Chromium. Por ello la imagen activa explícitamente `PUPPETEER_NO_SANDBOX=true` y usa `--no-sandbox` junto con `--disable-setuid-sandbox`. Es una reducción de aislamiento del navegador: se compensa parcialmente ejecutando la aplicación como usuario sin privilegios, sin exponer el depurador de Chromium y manteniendo una sola réplica, pero no equivale al sandbox normal. No actives esos flags en desarrollo salvo que el entorno lo exija.
 
 ## Migración controlada
 

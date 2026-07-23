@@ -8,7 +8,7 @@ await import(pathToFileURL(fileURLToPath(new URL("../dist/worker/worker.js", imp
 const browser = await puppeteer.launch({
   headless: true,
   executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-  args: ["--disable-dev-shm-usage", "--disable-gpu"],
+  args: ["--disable-dev-shm-usage", "--disable-gpu", ...(process.env.PUPPETEER_NO_SANDBOX === "true" ? ["--no-sandbox", "--disable-setuid-sandbox"] : [])],
 });
 const page = await browser.newPage();
 await page.goto("about:blank");
