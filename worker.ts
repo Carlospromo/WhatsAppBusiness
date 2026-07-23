@@ -94,10 +94,27 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
   await auditConnection(accountId, source === "ready_event" ? "WHATSAPP_CONNECTED" : "WHATSAPP_CONNECTED_STATE_VERIFIED");
   await presence.markIdle(accountId, client);
   operationalLog("connection.open", { account: safeLogRef(accountId), source });
-  await syncKnownContacts(accountId, client);
-  await refreshRecentContactProfilePictures(accountId, client);
-  await recoverPendingMedia(accountId, client);
+  schedulePostReadyMaintenance(accountId, client);
   return true;
+}
+
+/**
+ * Contact/profile reconciliation can be expensive for established accounts.
+ * It must never occupy the per-account event queue: WhatsApp Web delivers
+ * incoming messages through that same queue immediately after readiness.
+ */
+function schedulePostReadyMaintenance(accountId: string, client: WhatsAppWebClient) {
+  void (async () => {
+    operationalLog("connection.maintenance_started", { account: safeLogRef(accountId) });
+    try {
+      await syncKnownContacts(accountId, client);
+      await refreshRecentContactProfilePictures(accountId, client);
+      await recoverPendingMedia(accountId, client);
+      operationalLog("connection.maintenance_completed", { account: safeLogRef(accountId) });
+    } catch (error) {
+      operationalLog("connection.maintenance_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error");
+    }
+  })();
 }
 
 function startReadinessProbe(accountId: string, client: WhatsAppWebClient) {
@@ -301,8 +318,14 @@ async function connect(accountId: string) {
       if (chatId) await upsertContact(accountId, { chatId, displayName: contact.name ?? contact.shortName ?? null, pushName: contact.pushname ?? null });
     }));
     activeClient.on("message", (raw: Message) => void enqueueAccountWork(accountId, async () => {
+      const eventExternalId = raw.id?._serialized ?? raw.id?.id ?? "unknown";
+      const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
+      operationalLog("inbound.event_received", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), messageType: eventType });
       const message = normalizeWebMessage(raw as unknown as WebMessageLike);
-      if (!message || message.direction !== "INBOUND") return;
+      if (!message || message.direction !== "INBOUND") {
+        operationalLog("inbound.event_ignored", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), reason: "unsupported_or_outbound" }, "debug");
+        return;
+      }
       await contactFromMessage(accountId, raw);
       const persisted = await presence.duringActivity(accountId, activeClient, () => persistMessage(accountId, message));
       if (persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, activeClient, raw);
