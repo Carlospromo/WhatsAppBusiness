@@ -29,4 +29,9 @@ describe("whatsapp-web.js message normalization", () => {
     expect(normalizeWebMessage({ id: { _serialized: "group-1" }, from: "123@g.us", body: "Hola", type: "chat" })?.conversationType).toBe("GROUP");
     expect(normalizeWebMessage({ id: { _serialized: "unknown-1" }, from: "123@unknown", body: "Hola", type: "chat" })).toBeNull();
   });
+
+  it("accepts a direct LID identity without inventing a phone number", () => {
+    const result = normalizeWebMessage({ id: { _serialized: "lid-1" }, from: "123456789@lid", body: "Hola", type: "chat", timestamp: 100 });
+    expect(result).toMatchObject({ conversationJid: "123456789@lid", conversationType: "DIRECT", direction: "INBOUND", phoneJid: undefined });
+  });
 });

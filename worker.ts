@@ -16,12 +16,15 @@ import { processMediaAttachment, recoverPendingMedia } from "./lib/whatsapp/web-
 import { claimNextReadReceiptRequest, completeReadReceiptRequest, failReadReceiptRequest } from "./lib/whatsapp/read-receipts";
 import { TransientPresenceManager } from "./lib/whatsapp/transient-presence";
 import { canDispatchOutbound } from "./lib/whatsapp/outbound-safety";
+import { changedChatWatermarks, seedChatWatermarks } from "./lib/whatsapp/inbound-reconciliation";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 
 const { Client, LocalAuth, MessageAck } = whatsappWeb;
 const authRoot = process.env.WA_WEB_AUTH_DIR || "/data/wwebjs-auth";
 const readyTimeoutMs = Math.max(30_000, Number(process.env.WA_WEB_CLIENT_READY_TIMEOUT_SECONDS ?? 120) * 1_000);
 const accountCheckMs = Math.max(5_000, Number(process.env.WA_ACCOUNT_CHECK_SECONDS ?? 15) * 1_000);
+const inboundReconcileMs = Math.max(10_000, Number(process.env.WA_WEB_INBOUND_RECONCILE_SECONDS ?? 30) * 1_000);
+const inboundReconcileLimit = Math.max(1, Math.min(100, Number(process.env.WA_WEB_INBOUND_RECONCILE_LIMIT ?? 25)));
 const clients = new Map<string, WhatsAppWebClient>();
 const readyAccounts = new Set<string>();
 const authenticatedAccounts = new Set<string>();
@@ -34,11 +37,15 @@ const reconnectAttempts = new Map<string, number>();
 const readyTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const readinessProbeTimers = new Map<string, ReturnType<typeof setInterval>>();
 const browserDiagnosticsAttached = new WeakSet<object>();
+const inboundWatermarks = new Map<string, Map<string, number>>();
+const inboundStartedAt = new Map<string, Date>();
+const inboundReconcileFailures = new Map<string, number>();
 let stopping = false;
 let outboundTimer: ReturnType<typeof setInterval> | undefined;
 let mediaTimer: ReturnType<typeof setInterval> | undefined;
 let readTimer: ReturnType<typeof setInterval> | undefined;
 let staleTimer: ReturnType<typeof setInterval> | undefined;
+let inboundReconcileTimer: ReturnType<typeof setInterval> | undefined;
 
 const presence = new TransientPresenceManager(3_000, (accountId, error) => {
   operationalLog("presence.update_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "debug");
@@ -85,6 +92,13 @@ function attachBrowserDiagnostics(accountId: string, client: WhatsAppWebClient) 
 
 async function completeClientReady(accountId: string, client: WhatsAppWebClient, source: "ready_event" | "state_probe") {
   if (clients.get(accountId) !== client || readyAccounts.has(accountId) || !(await isAccountActive(accountId))) return false;
+  // A socket state alone is insufficient: the public WhatsApp Web API must
+  // also be able to read the local chat store before this account can receive
+  // event callbacks or use the bounded reconciliation fallback.
+  if (!(await primeInboundReconciliation(accountId, client))) {
+    operationalLog("connection.inbound_api_unavailable", { account: safeLogRef(accountId), source }, "error");
+    return false;
+  }
   readyAccounts.add(accountId);
   clearReadyTimer(accountId);
   clearReadinessProbe(accountId);
@@ -96,6 +110,34 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
   operationalLog("connection.open", { account: safeLogRef(accountId), source });
   schedulePostReadyMaintenance(accountId, client);
   return true;
+}
+
+function chatSnapshots(chats: Awaited<ReturnType<WhatsAppWebClient["getChats"]>>) {
+  return chats.flatMap((chat) => {
+    const id = chat.id?._serialized;
+    const timestamp = typeof chat.timestamp === "number" && Number.isSafeInteger(chat.timestamp) ? chat.timestamp : null;
+    return id && timestamp !== null ? [{ id, timestamp }] : [];
+  });
+}
+
+async function primeInboundReconciliation(accountId: string, client: WhatsAppWebClient) {
+  try {
+    const chats = await client.getChats();
+    inboundWatermarks.set(accountId, seedChatWatermarks(chatSnapshots(chats)));
+    inboundStartedAt.set(accountId, new Date());
+    inboundReconcileFailures.delete(accountId);
+    operationalLog("inbound.reconcile_primed", { account: safeLogRef(accountId), chats: chats.length });
+    return true;
+  } catch (error) {
+    const failures = (inboundReconcileFailures.get(accountId) ?? 0) + 1;
+    inboundReconcileFailures.set(accountId, failures);
+    operationalLog(
+      "inbound.reconcile_unavailable",
+      { account: safeLogRef(accountId), failures, ...safeErrorInfo(error) },
+      failures === 1 || failures % 6 === 0 ? "error" : "debug",
+    );
+    return false;
+  }
 }
 
 /**
@@ -132,7 +174,11 @@ function startReadinessProbe(accountId: string, client: WhatsAppWebClient) {
         await completeClientReady(accountId, client, "state_probe");
       }
     } catch (error) {
-      operationalLog("connection.state_probe_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "debug");
+      operationalLog(
+        "connection.state_probe_failed",
+        { account: safeLogRef(accountId), attempt: attempts, ...safeErrorInfo(error) },
+        attempts === 1 || attempts % 6 === 0 ? "error" : "debug",
+      );
     }
   });
   probe();
@@ -152,6 +198,11 @@ function waitForReady(accountId: string, client: WhatsAppWebClient) {
       bridgeType: WhatsAppBridgeType.WWEBJS,
     });
     operationalLog("connection.ready_timeout", { account: safeLogRef(accountId) }, "error");
+    // A bare Chromium session that never exposes the documented client APIs
+    // cannot receive messages reliably. Destroy it while preserving LocalAuth
+    // and retry with backoff instead of showing a false CONNECTED state.
+    await closeClient(accountId, client);
+    if (!stopping && await isAccountActive(accountId)) scheduleReconnect(accountId);
   }), readyTimeoutMs));
 }
 
@@ -168,6 +219,7 @@ function startQueueProcessors() {
   mediaTimer = setInterval(() => void processPendingMedia(), 10_000);
   readTimer = setInterval(() => void processReadReceipts(), 2_000);
   staleTimer = setInterval(() => void processStaleOutboundRequests(), 60_000);
+  inboundReconcileTimer = setInterval(() => void processInboundReconciliation(), inboundReconcileMs);
   void processStaleOutboundRequests();
 }
 
@@ -177,7 +229,8 @@ function stopQueueProcessorsIfIdle() {
   if (mediaTimer) clearInterval(mediaTimer);
   if (readTimer) clearInterval(readTimer);
   if (staleTimer) clearInterval(staleTimer);
-  outboundTimer = mediaTimer = readTimer = staleTimer = undefined;
+  if (inboundReconcileTimer) clearInterval(inboundReconcileTimer);
+  outboundTimer = mediaTimer = readTimer = staleTimer = inboundReconcileTimer = undefined;
 }
 
 async function isAccountActive(accountId: string) {
@@ -205,6 +258,9 @@ async function closeClient(accountId: string, client?: WhatsAppWebClient) {
   if (!active) {
     readyAccounts.delete(accountId);
     authenticatedAccounts.delete(accountId);
+    inboundWatermarks.delete(accountId);
+    inboundStartedAt.delete(accountId);
+    inboundReconcileFailures.delete(accountId);
     clearReadyTimer(accountId);
     clearReadinessProbe(accountId);
     return;
@@ -212,6 +268,9 @@ async function closeClient(accountId: string, client?: WhatsAppWebClient) {
   if (clients.get(accountId) === active) clients.delete(accountId);
   readyAccounts.delete(accountId);
   authenticatedAccounts.delete(accountId);
+  inboundWatermarks.delete(accountId);
+  inboundStartedAt.delete(accountId);
+  inboundReconcileFailures.delete(accountId);
   clearReadyTimer(accountId);
   clearReadinessProbe(accountId);
   await presence.dispose(accountId, active);
@@ -229,7 +288,7 @@ async function contactFromMessage(accountId: string, message: Message) {
   }
 }
 
-async function persistInboundMessageEvent(accountId: string, client: WhatsAppWebClient, raw: Message, source: "message" | "message_create") {
+async function persistInboundMessageEvent(accountId: string, client: WhatsAppWebClient, raw: Message, source: "message" | "message_create" | "reconcile") {
   const eventExternalId = raw.id?._serialized ?? raw.id?.id ?? "unknown";
   const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
   operationalLog("inbound.event_received", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), messageType: eventType, source });
@@ -255,8 +314,9 @@ async function syncKnownContacts(accountId: string, client: WhatsAppWebClient) {
       const chatId = contact.id?._serialized;
       if (chatId) await upsertContact(accountId, { chatId, displayName: contact.name ?? contact.shortName ?? null, pushName: contact.pushname ?? null });
     }
+    operationalLog("contacts.sync_completed", { account: safeLogRef(accountId), count: contacts.length });
   } catch (error) {
-    operationalLog("contacts.sync_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "debug");
+    operationalLog("contacts.sync_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error");
   }
 }
 
@@ -391,7 +451,7 @@ async function syncAccounts() {
     const status = account.connection?.status;
     // Existing records intentionally do not generate a Web QR until an
     // administrator requests a relink. Linked browser sessions reconnect.
-    if (account.connection?.bridgeType === WhatsAppBridgeType.BAILEYS_LEGACY || !status || status === WhatsAppConnectionStatus.DISCONNECTED) continue;
+    if (!status || status === WhatsAppConnectionStatus.DISCONNECTED) continue;
     if (!clients.has(account.id) && (await hasProfile(account.id))) void connect(account.id);
   }
   for (const [accountId, client] of clients) if (!allowed.has(accountId)) await closeClient(accountId, client);
@@ -450,6 +510,64 @@ async function processReadReceipts() {
 
 async function processPendingMedia() {
   for (const [accountId, client] of clients) if (readyAccounts.has(accountId)) await enqueueAccountWork(accountId, () => recoverPendingMedia(accountId, client));
+}
+
+/**
+ * `message` is the primary path. This bounded public-API reconciliation only
+ * runs as a safeguard for Web builds where the library fails to forward the
+ * browser event. It never scans phone numbers or imports full history.
+ */
+async function reconcileInboundMessages(accountId: string, client: WhatsAppWebClient) {
+  try {
+    const chats = await client.getChats();
+    const chatsById = new Map(chats.flatMap((chat) => chat.id?._serialized ? [[chat.id._serialized, chat] as const] : []));
+    const snapshots = chatSnapshots(chats);
+    const watermarks = inboundWatermarks.get(accountId);
+    if (!watermarks) {
+      inboundWatermarks.set(accountId, seedChatWatermarks(snapshots));
+      inboundStartedAt.set(accountId, new Date());
+      operationalLog("inbound.reconcile_primed", { account: safeLogRef(accountId), chats: chats.length });
+      return;
+    }
+    const changed = changedChatWatermarks(watermarks, snapshots);
+    if (!changed.length) return;
+    const startedAtSeconds = Math.floor((inboundStartedAt.get(accountId)?.getTime() ?? Date.now()) / 1_000);
+    let candidates = 0;
+    for (const chatState of changed.slice(0, 50)) {
+      const chat = chatsById.get(chatState.id);
+      try {
+        if (!chat) throw new Error("chat snapshot is no longer available");
+        const minimumTimestamp = Math.max(0, (chatState.previousTimestamp ?? startedAtSeconds) - 1);
+        const messages = await chat.fetchMessages({ limit: inboundReconcileLimit });
+        for (const raw of messages) {
+          const normalized = normalizeWebMessage(raw as unknown as WebMessageLike);
+          if (!normalized || normalized.direction !== "INBOUND" || Math.floor(normalized.sentAt.getTime() / 1_000) < minimumTimestamp) continue;
+          candidates += 1;
+          await persistInboundMessageEvent(accountId, client, raw, "reconcile");
+        }
+      } catch (error) {
+        // `changedChatWatermarks` updates optimistically. Restore the last
+        // value for this chat so a temporary public-API failure cannot make a
+        // newly arrived message invisible to the next bounded reconciliation.
+        if (chatState.previousTimestamp === null) watermarks.delete(chatState.id);
+        else watermarks.set(chatState.id, chatState.previousTimestamp);
+        operationalLog("inbound.reconcile_chat_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error");
+      }
+    }
+    inboundReconcileFailures.delete(accountId);
+    operationalLog("inbound.reconcile_completed", { account: safeLogRef(accountId), chats: changed.length, candidates });
+  } catch (error) {
+    const failures = (inboundReconcileFailures.get(accountId) ?? 0) + 1;
+    inboundReconcileFailures.set(accountId, failures);
+    operationalLog("inbound.reconcile_failed", { account: safeLogRef(accountId), failures, ...safeErrorInfo(error) }, "error");
+  }
+}
+
+function processInboundReconciliation() {
+  for (const [accountId, client] of clients) {
+    if (!readyAccounts.has(accountId)) continue;
+    void enqueueAccountWork(accountId, () => reconcileInboundMessages(accountId, client));
+  }
 }
 
 async function processStaleOutboundRequests() {

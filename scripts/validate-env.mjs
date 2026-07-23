@@ -22,6 +22,8 @@ function positiveInteger(name, fallback, minimum, maximum) {
 
 positiveInteger("WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
 positiveInteger("WA_WEB_CLIENT_READY_TIMEOUT_SECONDS", 120, 30, 600);
+positiveInteger("WA_WEB_INBOUND_RECONCILE_SECONDS", 30, 10, 300);
+positiveInteger("WA_WEB_INBOUND_RECONCILE_LIMIT", 25, 1, 100);
 positiveInteger("WA_WEB_MAX_MEDIA_BYTES", 25 * 1024 * 1024, 1, 40 * 1024 * 1024);
 positiveInteger("WA_WEB_MAX_IMAGE_BYTES", 10 * 1024 * 1024, 1, 40 * 1024 * 1024);
 positiveInteger("WA_WEB_MAX_AUDIO_BYTES", 20 * 1024 * 1024, 1, 40 * 1024 * 1024);

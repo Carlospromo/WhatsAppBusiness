@@ -4,13 +4,17 @@ Aplicación privada para gestionar varias cuentas de WhatsApp desde una bandeja 
 
 ## Bridge de WhatsApp
 
-El worker usa [`whatsapp-web.js` 1.34.7](https://github.com/wwebjs/whatsapp-web.js), fijada sin rangos, y un navegador Chromium real. Sustituye al bridge anterior para que el worker use APIs públicas del cliente de WhatsApp Web mediante un proceso ESM compilado (`node dist/worker/worker.js`), nunca `tsx` en producción.
+El worker usa [`whatsapp-web.js`](https://github.com/wwebjs/whatsapp-web.js) fijada al commit oficial e inmutable `1780711a1c86dfeca7c5ba6a66f950eac93dde28`, que corrige una carrera de inicio posterior a la release `1.34.7`. Se debe volver a una release estable cuando el proyecto publique esa corrección. El bridge usa un navegador Chromium real y un proceso ESM compilado (`node dist/worker/worker.js`), nunca `tsx` en producción.
 
 `whatsapp-web.js` no es un producto oficial de WhatsApp: no garantiza la aceptación de un envío ni evita restricciones que aplique WhatsApp. La aplicación solo permite acciones manuales de usuarios autorizados; no incluye respuestas automáticas, campañas, difusión ni envío masivo.
 
 La recepción fiable requiere mantener el cliente conectado. Cuando el cliente queda listo, el worker solicita presencia no disponible; esto no garantiza cómo WhatsApp mostrará la presencia a terceros.
 
-La conexión se confirma normalmente con el evento `ready`. Como medida de compatibilidad para versiones de WhatsApp Web que emiten `authenticated` pero no `ready`, el worker consulta el estado público del cliente durante el arranque y solo habilita la cuenta si dicho estado confirma `CONNECTED`. Si ninguna de las dos comprobaciones lo consigue, la cuenta queda en error seguro y los logs muestran fases de conexión sin exponer datos privados.
+La conexión se confirma normalmente con el evento `ready`. Como medida de compatibilidad para versiones de WhatsApp Web que emiten `authenticated` pero no `ready`, el worker consulta el estado público del cliente y verifica además que `getChats()` funciona antes de habilitar la cuenta. Si el navegador no puede leer sus chats, la cuenta no se declara conectada.
+
+La recepción usa primero los eventos públicos `message` y `message_create`. Como respaldo controlado, revisa periódicamente solo los chats cuya actividad cambió después de conectar y obtiene un máximo acotado de mensajes recientes por chat. PostgreSQL deduplica por cuenta e identificador externo. No se ejecuta una importación completa de historial ni se comprueban números de teléfono.
+
+Si la sesión del navegador no expone `getChats()` dentro del plazo de inicio, la cuenta queda en error y el worker se reinicia con *backoff*, conservando el perfil `LocalAuth`. No se muestra como conectada de forma engañosa. Los logs incluyen una categoría y una huella irreversible del error para correlacionar fallos sin revelar datos de WhatsApp.
 
 ## Funciones
 
@@ -28,9 +32,8 @@ La conexión se confirma normalmente con el evento `ready`. Como medida de compa
 | PostgreSQL | Datos de dominio, mensajes, colas, agenda, auditoría y metadatos de medios. |
 | Cloudflare R2 privado | Objetos de imagen, audio y vídeo. No se publica el bucket ni se usan URLs permanentes. |
 | `/data/wwebjs-auth` | Perfiles `LocalAuth` de Chromium de cada cuenta (`session-<accountId>`). Son secretos. |
-| `/data/wa-auth` | Sesiones heredadas del bridge anterior. Se conservan intactas y el worker nuevo no las usa. |
 
-Cada cuenta debe volver a vincularse mediante QR. No se convierten ni copian sesiones heredadas. Desde la integración, una desvinculación explícita y confirmada borra solo el perfil web de esa cuenta, nunca el de otra cuenta ni el directorio heredado.
+Cada cuenta debe vincularse mediante QR. Desde la integración, una desvinculación explícita y confirmada borra solo el perfil web de esa cuenta, nunca el de otra cuenta.
 
 Las identidades externas de conversación permiten enlazar chats de WhatsApp Web (`<teléfono>@c.us` y `<id>@g.us`) con conversaciones ya existentes, para no duplicar el histórico anterior.
 
@@ -69,12 +72,16 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `PUPPETEER_NO_SANDBOX` | `true` dentro de Railway porque su runtime bloquea los *namespaces* del sandbox de Chromium; en local debe permanecer `false` salvo necesidad equivalente. |
 | `WA_WEB_CLIENT_READY_TIMEOUT_SECONDS` | Tiempo máximo de inicio del cliente (30–600). |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
+| `WA_WEB_INBOUND_RECONCILE_SECONDS` | Respaldo de entradas con APIs públicas del navegador (10–300; predeterminado 30). |
+| `WA_WEB_INBOUND_RECONCILE_LIMIT` | Máximo de mensajes recientes por chat cambiado en cada ciclo (1–100; predeterminado 25). |
 | `WA_WEB_MAX_MEDIA_BYTES`, `WA_WEB_MAX_IMAGE_BYTES`, `WA_WEB_MAX_AUDIO_BYTES`, `WA_WEB_MAX_VIDEO_BYTES` | Límites opcionales: global y por tipo para medios Base64. Si se omiten, se usan 25 MB globales, 10 MB para imágenes, 20 MB para audio y 25 MB para vídeo. |
 | `WA_OUTBOUND_MAX_PENDING`, `WA_OUTBOUND_MAX_PER_MINUTE`, `WA_OUTBOUND_MIN_INTERVAL_SECONDS`, `WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY` | Límites preventivos de envío manual. |
 | `MEDIA_STORAGE=r2`, `R2_BUCKET`, `R2_ACCOUNT_ID`, `R2_ENDPOINT`, `R2_REGION`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Bucket R2 privado para medios. |
 | `LOG_LEVEL` | Nivel de logs de aplicación. |
 
 No reutilices `AUTH_SECRET` como clave de R2. No guardes variables reales en Git.
+
+Las variables históricas `WA_AUTH_DIR`, `WA_CONNECTION_MODE`, `WA_SYNC_INTERVAL_SECONDS`, `WA_SYNC_WINDOW_SECONDS` y `WA_SYNC_CONNECT_TIMEOUT_SECONDS` ya no se usan y deben eliminarse de Railway para evitar confusión. `MEDIA_ENCRYPTION_KEY` tampoco es necesaria con este bridge: no se conservan envoltorios de descarga del bridge anterior.
 
 ## Medios
 
@@ -90,18 +97,18 @@ R2 debe permanecer privado: no actives `r2.dev`, dominio público ni credenciale
 4. Despliega una sola réplica. Next.js y el worker comparten el mismo contenedor y el mismo volumen.
 5. Configura `/api/health` como healthcheck público.
 
-La imagen está basada en `node:22-bookworm-slim`, instala Chromium y `chromium-sandbox` de Debian y ejecuta Next.js y el worker como un usuario sin privilegios. El entrypoint prepara solo `/data/wwebjs-auth` para ese usuario; no modifica `/data/wa-auth`. No se inicia Chromium, no se aplican migraciones y no se escribe en `/data` durante el build.
+La imagen está basada en `node:22-bookworm-slim`, instala Chromium y `chromium-sandbox` de Debian y ejecuta Next.js y el worker como un usuario sin privilegios. El entrypoint prepara solo `/data/wwebjs-auth` para ese usuario. No se inicia Chromium, no se aplican migraciones y no se escribe en `/data` durante el build.
 
 El runtime de Railway bloquea los *namespaces* que necesita el sandbox de Chromium. Por ello la imagen activa explícitamente `PUPPETEER_NO_SANDBOX=true` y usa `--no-sandbox` junto con `--disable-setuid-sandbox`. Es una reducción de aislamiento del navegador: se compensa parcialmente ejecutando la aplicación como usuario sin privilegios, sin exponer el depurador de Chromium y manteniendo una sola réplica, pero no equivale al sandbox normal. No actives esos flags en desarrollo salvo que el entorno lo exija.
 
 ## Migración controlada
 
 1. Prueba primero en otro servicio Railway, con PostgreSQL, volumen y cuenta de prueba nuevos.
-2. No copies `/data/wa-auth` ni ejecutes el bridge antiguo y el nuevo sobre el mismo número.
+2. Usa un volumen de prueba nuevo y una cuenta de prueba antes de actualizar producción.
 3. Verifica QR, reinicio, recepción, envío manual a un chat conocido, acuse, lectura, imagen/audio/vídeo pequeño, roles y dos cuentas aisladas.
 4. Antes de producción, realiza una copia de seguridad de PostgreSQL y conserva el volumen actual intacto.
 5. Despliega una sola réplica y vincula cada cuenta una a una mediante QR.
-6. Si falla, vuelve a la imagen anterior sin borrar `/data/wa-auth` ni los nuevos perfiles hasta diagnosticar el problema.
+6. Si falla, vuelve a la imagen anterior sin borrar los perfiles de WhatsApp Web hasta diagnosticar el problema.
 
 La recuperación manual de historial es solo para administradores, por cuenta y conversación, con rango, límites y deduplicación. WhatsApp Web no garantiza que conserve mensajes antiguos.
 

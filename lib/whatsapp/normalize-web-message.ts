@@ -108,7 +108,10 @@ export function normalizeWebMessage(message: WebMessageLike): NormalizedWebMessa
   const fromMe = Boolean(message.fromMe);
   const conversationJid = fromMe ? message.to : message.from;
   if (!externalId || !conversationJid || temporaryOrUnsupported(message)) return null;
-  const conversationType = conversationJid.endsWith("@g.us") ? "GROUP" : conversationJid.endsWith("@c.us") ? "DIRECT" : null;
+  // WhatsApp Web normally exposes direct chats as @c.us, but linked-device
+  // rollouts can surface a LID identity first. It is still a direct chat,
+  // although no phone number is inferred until a verified mapping arrives.
+  const conversationType = conversationJid.endsWith("@g.us") ? "GROUP" : (conversationJid.endsWith("@c.us") || conversationJid.endsWith("@lid")) ? "DIRECT" : null;
   if (!conversationType) return null;
   const media = mediaFor(message);
   const body = String(message.body ?? "").trim();
@@ -117,7 +120,7 @@ export function normalizeWebMessage(message: WebMessageLike): NormalizedWebMessa
     externalId,
     conversationJid,
     senderJid: conversationType === "GROUP" ? (fromMe ? "self" : String(message.from ?? conversationJid)) : conversationJid,
-    phoneJid: conversationType === "DIRECT" ? conversationJid : undefined,
+    phoneJid: conversationType === "DIRECT" && conversationJid.endsWith("@c.us") ? conversationJid : undefined,
     direction: fromMe ? "OUTBOUND" : "INBOUND",
     body,
     messageType: media?.kind === MediaAttachmentKind.IMAGE ? "image" : media?.kind === MediaAttachmentKind.AUDIO ? "audio" : media?.kind === MediaAttachmentKind.VIDEO ? "video" : "text",
