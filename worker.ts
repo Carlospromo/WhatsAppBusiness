@@ -47,6 +47,7 @@ const browserDiagnosticsAttached = new WeakSet<object>();
 const inboundWatermarks = new Map<string, Map<string, number>>();
 const inboundStartedAt = new Map<string, Date>();
 const inboundReconcileFailures = new Map<string, number>();
+const inboundReconciliationDisabled = new Set<string>();
 let stopping = false;
 let outboundTimer: ReturnType<typeof setInterval> | undefined;
 let mediaTimer: ReturnType<typeof setInterval> | undefined;
@@ -101,10 +102,13 @@ function attachBrowserDiagnostics(accountId: string, client: WhatsAppWebClient) 
 
 async function completeClientReady(accountId: string, client: WhatsAppWebClient, source: "ready_event" | "state_probe") {
   if (clients.get(accountId) !== client || readyAccounts.has(accountId) || !(await isAccountActive(accountId))) return false;
-  // A socket state alone is insufficient: the public WhatsApp Web API must
-  // also be able to read the local chat store before this account can receive
-  // event callbacks or use the bounded reconciliation fallback.
-  if (!(await primeInboundReconciliation(accountId, client))) {
+  // A `ready` event is emitted only after whatsapp-web.js has attached its
+  // public message listeners. `getChats()` serializes every cached chat and
+  // can fail because of one malformed/unsupported chat (often a group); that
+  // optional reconciliation API must never prevent realtime reception.
+  // Without `ready`, however, a CONNECTED socket alone does not prove that
+  // those listeners exist, so the compatibility state probe remains strict.
+  if (source === "state_probe" && !(await primeInboundReconciliation(accountId, client))) {
     operationalLog("connection.inbound_api_unavailable", { account: safeLogRef(accountId), source }, "error");
     return false;
   }
@@ -117,6 +121,9 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
   await auditConnection(accountId, source === "ready_event" ? "WHATSAPP_CONNECTED" : "WHATSAPP_CONNECTED_STATE_VERIFIED");
   await presence.markIdle(accountId, client);
   operationalLog("connection.open", { account: safeLogRef(accountId), source });
+  // Baseline reconciliation is best-effort after a real ready event. It is a
+  // recovery aid only; incoming `message` events are already wired above.
+  if (source === "ready_event") void primeInboundReconciliation(accountId, client);
   schedulePostReadyMaintenance(accountId, client);
   return true;
 }
@@ -135,6 +142,7 @@ async function primeInboundReconciliation(accountId: string, client: WhatsAppWeb
     inboundWatermarks.set(accountId, seedChatWatermarks(chatSnapshots(chats)));
     inboundStartedAt.set(accountId, new Date());
     inboundReconcileFailures.delete(accountId);
+    inboundReconciliationDisabled.delete(accountId);
     operationalLog("inbound.reconcile_primed", { account: safeLogRef(accountId), chats: chats.length });
     return true;
   } catch (error) {
@@ -145,6 +153,10 @@ async function primeInboundReconciliation(accountId: string, client: WhatsAppWeb
       { account: safeLogRef(accountId), failures, ...safeErrorInfo(error) },
       failures === 1 || failures % 6 === 0 ? "error" : "debug",
     );
+    if (failures >= 3) {
+      inboundReconciliationDisabled.add(accountId);
+      operationalLog("inbound.reconcile_disabled", { account: safeLogRef(accountId), failures, reason: "PUBLIC_CHAT_API_UNAVAILABLE" }, "error");
+    }
     return false;
   }
 }
@@ -288,6 +300,7 @@ async function closeClient(accountId: string, client?: WhatsAppWebClient) {
     inboundWatermarks.delete(accountId);
     inboundStartedAt.delete(accountId);
     inboundReconcileFailures.delete(accountId);
+    inboundReconciliationDisabled.delete(accountId);
     clearReadyTimer(accountId);
     clearReadinessProbe(accountId);
     return;
@@ -298,6 +311,7 @@ async function closeClient(accountId: string, client?: WhatsAppWebClient) {
   inboundWatermarks.delete(accountId);
   inboundStartedAt.delete(accountId);
   inboundReconcileFailures.delete(accountId);
+  inboundReconciliationDisabled.delete(accountId);
   clearReadyTimer(accountId);
   clearReadinessProbe(accountId);
   await presence.dispose(accountId, active);
@@ -592,12 +606,16 @@ async function reconcileInboundMessages(accountId: string, client: WhatsAppWebCl
     const failures = (inboundReconcileFailures.get(accountId) ?? 0) + 1;
     inboundReconcileFailures.set(accountId, failures);
     operationalLog("inbound.reconcile_failed", { account: safeLogRef(accountId), failures, ...safeErrorInfo(error) }, "error");
+    if (failures >= 3) {
+      inboundReconciliationDisabled.add(accountId);
+      operationalLog("inbound.reconcile_disabled", { account: safeLogRef(accountId), failures, reason: "PUBLIC_CHAT_API_UNAVAILABLE" }, "error");
+    }
   }
 }
 
 function processInboundReconciliation() {
   for (const [accountId, client] of clients) {
-    if (!readyAccounts.has(accountId)) continue;
+    if (!readyAccounts.has(accountId) || inboundReconciliationDisabled.has(accountId)) continue;
     void enqueueAccountWork(accountId, () => reconcileInboundMessages(accountId, client));
   }
 }

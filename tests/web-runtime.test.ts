@@ -10,6 +10,8 @@ describe("WhatsApp Web worker runtime", () => {
     expect(worker).toContain('from "whatsapp-web.js"');
     expect(worker).toContain('webVersionCache: { type: "none" }');
     expect(worker).toContain("WA_WEB_READY_PROBE_DELAY_SECONDS");
+    expect(worker).toContain('source === "state_probe" && !(await primeInboundReconciliation(accountId, client))');
+    expect(worker).toContain("inboundReconciliationDisabled");
     expect(worker).not.toContain(["relay", "Message"].join(""));
   });
 });
