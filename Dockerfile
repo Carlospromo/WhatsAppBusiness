@@ -6,7 +6,7 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
     XDG_CONFIG_HOME=/tmp/.chromium \
     XDG_CACHE_HOME=/tmp/.chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium ca-certificates dumb-init gosu python3 make g++ \
+    chromium chromium-sandbox ca-certificates dumb-init gosu python3 make g++ \
     fonts-liberation fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system webworker \
