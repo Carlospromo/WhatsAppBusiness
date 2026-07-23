@@ -10,6 +10,8 @@ El worker usa [`whatsapp-web.js` 1.34.7](https://github.com/wwebjs/whatsapp-web.
 
 La recepción fiable requiere mantener el cliente conectado. Cuando el cliente queda listo, el worker solicita presencia no disponible; esto no garantiza cómo WhatsApp mostrará la presencia a terceros.
 
+La conexión se confirma normalmente con el evento `ready`. Como medida de compatibilidad para versiones de WhatsApp Web que emiten `authenticated` pero no `ready`, el worker consulta el estado público del cliente durante el arranque y solo habilita la cuenta si dicho estado confirma `CONNECTED`. Si ninguna de las dos comprobaciones lo consigue, la cuenta queda en error seguro y los logs muestran fases de conexión sin exponer datos privados.
+
 ## Funciones
 
 - Múltiples cuentas aisladas con miembros y roles globales `ADMIN`, `AGENT` y `VIEWER`.
