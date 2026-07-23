@@ -3,6 +3,7 @@ const missing = required.filter((name) => !process.env[name]);
 if (missing.length) throw new Error(`Faltan variables de entorno requeridas: ${missing.join(", ")}`);
 if (process.env.AUTH_SECRET.length < 32) throw new Error("AUTH_SECRET debe contener al menos 32 caracteres.");
 if (process.env.NODE_ENV === "production" && !process.env.WA_WEB_AUTH_DIR.startsWith("/data/")) throw new Error("WA_WEB_AUTH_DIR debe estar dentro del volumen persistente /data en producciÃ³n.");
+if (process.env.PUPPETEER_NO_SANDBOX && !["true", "false"].includes(process.env.PUPPETEER_NO_SANDBOX)) throw new Error("PUPPETEER_NO_SANDBOX debe ser true o false.");
 
 const mediaRequired = ["MEDIA_STORAGE", "R2_BUCKET", "R2_ACCOUNT_ID", "R2_ENDPOINT", "R2_REGION", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "WA_WEB_MAX_MEDIA_BYTES", "WA_WEB_MAX_IMAGE_BYTES", "WA_WEB_MAX_AUDIO_BYTES", "WA_WEB_MAX_VIDEO_BYTES"];
 const missingMedia = mediaRequired.filter((name) => !process.env[name]);
