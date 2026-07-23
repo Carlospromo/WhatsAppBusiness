@@ -50,7 +50,7 @@ export function normalizePhone(value: unknown, defaultCountry = "ES") {
 }
 
 export function phoneFromJid(jid: string | null | undefined) {
-  if (!jid?.endsWith("@s.whatsapp.net")) return null;
+  if (!jid || (!jid.endsWith("@s.whatsapp.net") && !jid.endsWith("@c.us"))) return null;
   const digits = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
   return digits.length >= 7 && digits.length <= 15 ? `+${digits}` : null;
 }
@@ -93,15 +93,18 @@ export async function createManualAddressBookContact(accountId: string, userId: 
     : await prisma.addressBookContact.create({ data: { accountId, ...data, phones: { create: { accountId, normalizedPhone: input.normalizedPhone } } } });
 
   await prisma.contact.updateMany({ where: { accountId, phone: input.normalizedPhone }, data: { addressBookContactId: contact.id } });
-  const jid = `${input.normalizedPhone.slice(1)}@s.whatsapp.net`;
-  const existingConversation = await prisma.conversation.findFirst({ where: { accountId, jid }, select: { id: true } });
+  const jid = `${input.normalizedPhone.slice(1)}@c.us`;
+  const existingConversation = await prisma.conversation.findFirst({
+    where: { accountId, type: "DIRECT", OR: [{ jid }, { contact: { phone: input.normalizedPhone } }] },
+    select: { id: true },
+  });
   if (existingConversation) {
     const technical = await prisma.contact.upsert({
       where: { accountId_jid: { accountId, jid } },
       create: { accountId, jid, phone: input.normalizedPhone, displayName: input.displayName, addressBookContactId: contact.id },
       update: { phone: input.normalizedPhone, addressBookContactId: contact.id },
     });
-    await prisma.conversation.updateMany({ where: { accountId, jid, contactId: null }, data: { contactId: technical.id } });
+    await prisma.conversation.updateMany({ where: { id: existingConversation.id, contactId: null }, data: { contactId: technical.id } });
   }
   return { status: existingPhone ? "UPDATED" as const : "CREATED" as const, id: contact.id };
 }

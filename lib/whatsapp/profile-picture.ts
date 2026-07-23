@@ -4,11 +4,11 @@ import { isTrustedProfilePictureUrl } from "./profile-picture-url";
 const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 type ProfilePictureSocket = {
-  profilePictureUrl: (jid: string, type?: "preview" | "image", timeoutMs?: number) => Promise<string | undefined>;
+  getProfilePicUrl: (chatId: string) => Promise<string | undefined>;
 };
 
 async function needsRefresh(accountId: string, jid: string) {
-  if (!jid.endsWith("@s.whatsapp.net")) return false;
+  if (!jid.endsWith("@c.us")) return false;
   const contact = await prisma.contact.findUnique({
     where: { accountId_jid: { accountId, jid } },
     select: { profilePictureUpdatedAt: true },
@@ -20,7 +20,7 @@ export async function refreshContactProfilePicture(accountId: string, socket: Pr
   if (!await needsRefresh(accountId, jid)) return;
   let profilePictureUrl: string | null = null;
   try {
-    const candidate = await socket.profilePictureUrl(jid, "preview", 5_000);
+    const candidate = await socket.getProfilePicUrl(jid);
     profilePictureUrl = candidate && isTrustedProfilePictureUrl(candidate) ? candidate : null;
   } catch {
     // Profile pictures are optional and unavailable for many WhatsApp contacts.

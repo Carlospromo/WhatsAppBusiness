@@ -1,5 +1,6 @@
 export type PresenceSocket = {
-  sendPresenceUpdate(type: "available" | "unavailable"): Promise<void>;
+  sendPresenceAvailable(): Promise<void>;
+  sendPresenceUnavailable(): Promise<void>;
 };
 
 type PresenceState = {
@@ -37,7 +38,8 @@ export class TransientPresenceManager {
     state.transition = state.transition.catch(() => undefined).then(async () => {
       if (!force && state.announced === type) return;
       try {
-        await state.socket.sendPresenceUpdate(type);
+        if (type === "available") await state.socket.sendPresenceAvailable();
+        else await state.socket.sendPresenceUnavailable();
         state.announced = type;
       } catch (error) {
         this.onError(accountId, error);

@@ -1,8 +1,9 @@
-import { WhatsAppConnectionStatus } from "@prisma/client";
+import { WhatsAppBridgeType, WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export async function updateConnection(accountId: string, data: {
   status: WhatsAppConnectionStatus;
+  bridgeType?: WhatsAppBridgeType;
   qrCode?: string | null;
   qrExpiresAt?: Date | null;
   accountJid?: string | null;

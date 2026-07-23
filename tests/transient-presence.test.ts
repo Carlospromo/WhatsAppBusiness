@@ -7,7 +7,7 @@ describe("transient WhatsApp presence", () => {
   it("is unavailable while idle and briefly available only during activity", async () => {
     vi.useFakeTimers();
     const sent: string[] = [];
-    const socket = { sendPresenceUpdate: async (state: "available" | "unavailable") => { sent.push(state); } };
+    const socket = { sendPresenceAvailable: async () => { sent.push("available"); }, sendPresenceUnavailable: async () => { sent.push("unavailable"); } };
     const presence = new TransientPresenceManager(3_000);
 
     await presence.markIdle("account", socket);
@@ -23,7 +23,7 @@ describe("transient WhatsApp presence", () => {
   it("keeps the account available while overlapping work is still active", async () => {
     vi.useFakeTimers();
     const sent: string[] = [];
-    const socket = { sendPresenceUpdate: async (state: "available" | "unavailable") => { sent.push(state); } };
+    const socket = { sendPresenceAvailable: async () => { sent.push("available"); }, sendPresenceUnavailable: async () => { sent.push("unavailable"); } };
     const presence = new TransientPresenceManager(3_000);
     let release!: () => void;
     const ongoing = presence.duringActivity("account", socket, () => new Promise<void>((resolve) => { release = resolve; }));

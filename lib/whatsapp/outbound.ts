@@ -7,7 +7,7 @@ export async function claimNextOutboundRequest(accountId: string) {
   const request = await prisma.outboundMessageRequest.findFirst({
     where: { accountId, status: OutboundMessageStatus.PENDING, attemptCount: { lt: MAX_OUTBOUND_ATTEMPTS } },
     orderBy: { createdAt: "asc" },
-    include: { conversation: { include: { contact: { select: { phone: true } } } } },
+    include: { conversation: { include: { contact: { select: { phone: true } }, externalIdentities: { select: { bridgeType: true, externalChatId: true } } } } },
   });
   if (!request) return null;
   const claimed = await prisma.outboundMessageRequest.updateMany({ where: { id: request.id, status: OutboundMessageStatus.PENDING, attemptCount: { lt: MAX_OUTBOUND_ATTEMPTS } }, data: { status: OutboundMessageStatus.SENDING, attemptCount: { increment: 1 }, lastAttemptAt: new Date(), safeError: null } });
@@ -15,7 +15,7 @@ export async function claimNextOutboundRequest(accountId: string) {
 }
 
 /**
- * The WhatsApp acknowledgement can arrive while relayMessage is still
+ * The WhatsApp acknowledgement can arrive while sendMessage is still
  * resolving. Persist this correlation first so a remote rejection is never
  * lost just because it won that race.
  */
@@ -27,9 +27,9 @@ export async function attachOutboundExternalId(requestId: string, externalId: st
   return updated.count === 1;
 }
 
-/** The return from relayMessage is only a local relay acceptance. */
+/** The return from sendMessage is only a local relay acceptance. */
 export async function recordOutboundRelayAccepted(request: NonNullable<Awaited<ReturnType<typeof claimNextOutboundRequest>>>, externalId: string, destinationJid: string) {
-  await persistMessage(request.accountId, { externalId, conversationJid: request.conversation.jid, conversationType: request.conversation.type, direction: "OUTBOUND", senderJid: destinationJid, body: request.body, messageType: "text", sentAt: new Date() });
+  await persistMessage(request.accountId, { externalId, conversationJid: destinationJid, conversationType: request.conversation.type, direction: "OUTBOUND", senderJid: destinationJid, body: request.body, messageType: "text", sentAt: new Date() });
   const updated = await prisma.outboundMessageRequest.updateMany({ where: { id: request.id, status: OutboundMessageStatus.SENDING, externalId }, data: { safeError: null } });
   if (updated.count) await prisma.auditLog.create({ data: { accountId: request.accountId, userId: request.requestedById, action: "OUTBOUND_RELAY_ACCEPTED", entity: "OutboundMessageRequest", entityId: request.id } });
   return updated.count === 1;
@@ -57,7 +57,7 @@ export async function cancelOutboundRequest(id: string, safeError = "El envío f
 
 /**
  * A local relay acknowledgement does not guarantee that WhatsApp can deliver
- * the encrypted message. Keep the request state truthful when Baileys later
+ * the message. Keep the request state truthful when the browser bridge later
  * reports a delivery error; raw WhatsApp codes are deliberately not exposed.
  */
 export async function cancelOutboundDelivery(accountId: string, externalId: string, safeError = "WhatsApp no pudo entregar el mensaje.") {
