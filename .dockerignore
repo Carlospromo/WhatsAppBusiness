@@ -12,3 +12,4 @@ node_modules
 coverage
 dist
 *.tsbuildinfo
+.wwebjs_cache
