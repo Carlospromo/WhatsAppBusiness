@@ -1,4 +1,4 @@
-import { ConversationType, MessageDirection, OutboundMessageStatus } from "@prisma/client";
+import { ConversationType, MessageDirection, OutboundMessageStatus, WhatsAppBridgeType } from "@prisma/client";
 import { prisma } from "./prisma";
 import { visibleConversation } from "./conversation-identity";
 
@@ -24,7 +24,7 @@ export function validateMessageBody(value: unknown) {
 }
 
 export function directConversationJid(normalizedPhone: string) {
-  return /^\+[1-9]\d{6,14}$/.test(normalizedPhone) ? `${normalizedPhone.slice(1)}@s.whatsapp.net` : null;
+  return /^\+[1-9]\d{6,14}$/.test(normalizedPhone) ? `${normalizedPhone.slice(1)}@c.us` : null;
 }
 
 export async function listConversations(query: { accountIds: string[]; accountId?: string; search?: string; filter?: string; cursor?: string }) {
@@ -71,10 +71,31 @@ export async function createDirectConversationAndQueue(accountId: string, userId
       create: { accountId, jid, phone: normalizedPhone, displayName: knownPhone?.addressBookContact.displayName ?? null, addressBookContactId: knownPhone?.addressBookContactId ?? null },
       update: { phone: normalizedPhone, displayName: knownPhone?.addressBookContact.displayName ?? undefined, addressBookContactId: knownPhone?.addressBookContactId ?? undefined, syncedAt: new Date() },
     });
-    const conversation = await transaction.conversation.upsert({
-      where: { accountId_jid: { accountId, jid } },
-      create: { accountId, jid, type: ConversationType.DIRECT, contactId: contact.id },
-      update: { contactId: contact.id },
+    const identity = await transaction.conversationExternalIdentity.findUnique({
+      where: { accountId_bridgeType_externalChatId: { accountId, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: jid } },
+      select: { conversationId: true },
+    });
+    const existingConversation = identity
+      ? await transaction.conversation.findUnique({ where: { id: identity.conversationId } })
+      : await transaction.conversation.findFirst({
+        where: {
+          accountId,
+          type: ConversationType.DIRECT,
+          OR: [
+            { jid },
+            { contact: { phone: normalizedPhone } },
+            { contact: { addressBookContact: { phones: { some: { normalizedPhone } } } } },
+          ],
+        },
+        orderBy: { lastMessageAt: "desc" },
+      });
+    const conversation = existingConversation
+      ? await transaction.conversation.update({ where: { id: existingConversation.id }, data: { contactId: existingConversation.contactId ?? contact.id } })
+      : await transaction.conversation.create({ data: { accountId, jid, type: ConversationType.DIRECT, contactId: contact.id } });
+    await transaction.conversationExternalIdentity.upsert({
+      where: { accountId_bridgeType_externalChatId: { accountId, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: jid } },
+      create: { accountId, conversationId: conversation.id, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: jid, type: ConversationType.DIRECT, normalizedPhone },
+      update: { normalizedPhone },
     });
     const request = await transaction.outboundMessageRequest.create({ data: { accountId, conversationId: conversation.id, requestedById: userId, body, status: OutboundMessageStatus.PENDING } });
     return { conversation, request };

@@ -1,14 +1,14 @@
-import type { NormalizedMessage } from "./normalize";
+import type { NormalizedWebMessage } from "./normalize-web-message";
 
-/** Maps a Baileys event to fields that actually belong to the Message model. */
-export function messageRecordData(accountId: string, conversationId: string, message: NormalizedMessage) {
+/** Maps a normalized bridge event to fields that belong to the Message model. */
+export function messageRecordData(accountId: string, conversationId: string, message: NormalizedWebMessage) {
   return {
     accountId,
     conversationId,
     externalId: message.externalId,
     direction: message.direction,
     senderJid: message.senderJid,
-    receiptParticipant: message.receiptParticipant,
+    receiptParticipant: null,
     body: message.body,
     messageType: message.messageType,
     sentAt: message.sentAt,

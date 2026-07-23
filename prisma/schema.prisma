@@ -21,6 +21,11 @@ enum WhatsAppConnectionStatus {
   ERROR
 }
 
+enum WhatsAppBridgeType {
+  BAILEYS_LEGACY
+  WWEBJS
+}
+
 enum ConversationType {
   DIRECT
   GROUP
@@ -96,25 +101,25 @@ enum ContactImportItemAction {
 }
 
 model User {
-  id                    String                      @id @default(cuid())
-  email                 String                      @unique
-  name                  String
-  passwordHash          String
-  role                  Role                        @default(AGENT)
-  isActive              Boolean                     @default(true)
-  sessions              Session[]
-  auditLogs             AuditLog[]
-  outboundRequests      OutboundMessageRequest[]
-  readReceiptRequests   ReadReceiptRequest[]
+  id                      String                      @id @default(cuid())
+  email                   String                      @unique
+  name                    String
+  passwordHash            String
+  role                    Role                        @default(AGENT)
+  isActive                Boolean                     @default(true)
+  sessions                Session[]
+  auditLogs               AuditLog[]
+  outboundRequests        OutboundMessageRequest[]
+  readReceiptRequests     ReadReceiptRequest[]
   historyRecoveryRequests HistoryRecoveryRequest[]
-  assignedConversations Conversation[]              @relation("ConversationAssignee")
-  notes                 ConversationNote[]
-  accountMemberships    WhatsAppAccountMembership[]
-  createdAccounts       WhatsAppAccount[]           @relation("AccountCreator")
-  contactImports        ContactImport[]
-  addressBookContacts   AddressBookContact[]        @relation("AddressBookCreator")
-  createdAt             DateTime                    @default(now())
-  updatedAt             DateTime                    @updatedAt
+  assignedConversations   Conversation[]              @relation("ConversationAssignee")
+  notes                   ConversationNote[]
+  accountMemberships      WhatsAppAccountMembership[]
+  createdAccounts         WhatsAppAccount[]           @relation("AccountCreator")
+  contactImports          ContactImport[]
+  addressBookContacts     AddressBookContact[]        @relation("AddressBookCreator")
+  createdAt               DateTime                    @default(now())
+  updatedAt               DateTime                    @updatedAt
 }
 
 model Session {
@@ -130,29 +135,30 @@ model Session {
 }
 
 model WhatsAppAccount {
-  id                  String                      @id @default(cuid())
-  name                String
-  slug                String                      @unique
-  isActive            Boolean                     @default(true)
-  defaultPhoneCountry String                      @default("ES")
-  createdById         String?
-  createdBy           User?                       @relation("AccountCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  connection          WhatsAppConnection?
-  contacts            Contact[]
-  conversations       Conversation[]
-  messages            Message[]
-  mediaAttachments    MediaAttachment[]
-  outboundRequests    OutboundMessageRequest[]
-  readReceiptRequests ReadReceiptRequest[]
-  historyRecoveryRequests HistoryRecoveryRequest[]
-  tags                ConversationTag[]
-  memberships         WhatsAppAccountMembership[]
-  auditLogs           AuditLog[]
-  addressBookContacts AddressBookContact[]
-  addressBookPhones   AddressBookPhone[]
-  contactImports      ContactImport[]
-  createdAt           DateTime                    @default(now())
-  updatedAt           DateTime                    @updatedAt
+  id                             String                         @id @default(cuid())
+  name                           String
+  slug                           String                         @unique
+  isActive                       Boolean                        @default(true)
+  defaultPhoneCountry            String                         @default("ES")
+  createdById                    String?
+  createdBy                      User?                          @relation("AccountCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  connection                     WhatsAppConnection?
+  contacts                       Contact[]
+  conversations                  Conversation[]
+  conversationExternalIdentities ConversationExternalIdentity[]
+  messages                       Message[]
+  mediaAttachments               MediaAttachment[]
+  outboundRequests               OutboundMessageRequest[]
+  readReceiptRequests            ReadReceiptRequest[]
+  historyRecoveryRequests        HistoryRecoveryRequest[]
+  tags                           ConversationTag[]
+  memberships                    WhatsAppAccountMembership[]
+  auditLogs                      AuditLog[]
+  addressBookContacts            AddressBookContact[]
+  addressBookPhones              AddressBookPhone[]
+  contactImports                 ContactImport[]
+  createdAt                      DateTime                       @default(now())
+  updatedAt                      DateTime                       @updatedAt
 
   @@index([isActive])
 }
@@ -169,21 +175,22 @@ model WhatsAppAccountMembership {
 }
 
 model WhatsAppConnection {
-  id          String                   @id @default(cuid())
-  accountId   String                   @unique
-  status      WhatsAppConnectionStatus @default(DISCONNECTED)
-  qrCode      String?
-  qrExpiresAt DateTime?
-  accountJid  String?
-  maskedPhone String?
-  lastError   String?
-  relinkRequestId String?
-  outboundPausedAt DateTime?
+  id                  String                   @id @default(cuid())
+  accountId           String                   @unique
+  status              WhatsAppConnectionStatus @default(DISCONNECTED)
+  bridgeType          WhatsAppBridgeType       @default(WWEBJS)
+  qrCode              String?
+  qrExpiresAt         DateTime?
+  accountJid          String?
+  maskedPhone         String?
+  lastError           String?
+  relinkRequestId     String?
+  outboundPausedAt    DateTime?
   outboundPauseEndsAt DateTime?
   outboundPauseReason String?
-  createdAt   DateTime                 @default(now())
-  updatedAt   DateTime                 @updatedAt
-  account     WhatsAppAccount          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  account             WhatsAppAccount          @relation(fields: [accountId], references: [id], onDelete: Cascade)
 }
 
 model Contact {
@@ -297,27 +304,28 @@ model ContactImportItem {
 }
 
 model Conversation {
-  id                 String                   @id @default(cuid())
-  accountId          String
-  jid                String
-  type               ConversationType
-  contactId          String?
-  lastMessageAt      DateTime?
-  lastMessagePreview String?
-  unreadCount        Int                      @default(0)
-  assignedToId       String?
-  assignedAt         DateTime?
-  account            WhatsAppAccount          @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  contact            Contact?                 @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  assignedTo         User?                    @relation("ConversationAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
-  messages           Message[]
-  outboundRequests   OutboundMessageRequest[]
-  readReceiptRequests ReadReceiptRequest[]
+  id                      String                         @id @default(cuid())
+  accountId               String
+  jid                     String
+  type                    ConversationType
+  contactId               String?
+  lastMessageAt           DateTime?
+  lastMessagePreview      String?
+  unreadCount             Int                            @default(0)
+  assignedToId            String?
+  assignedAt              DateTime?
+  account                 WhatsAppAccount                @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  contact                 Contact?                       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  assignedTo              User?                          @relation("ConversationAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages                Message[]
+  outboundRequests        OutboundMessageRequest[]
+  readReceiptRequests     ReadReceiptRequest[]
   historyRecoveryRequests HistoryRecoveryRequest[]
-  notes              ConversationNote[]
-  tags               ConversationTag[]
-  createdAt          DateTime                 @default(now())
-  updatedAt          DateTime                 @updatedAt
+  notes                   ConversationNote[]
+  tags                    ConversationTag[]
+  externalIdentities      ConversationExternalIdentity[]
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
 
   @@unique([accountId, jid])
   @@index([accountId, lastMessageAt])
@@ -325,22 +333,43 @@ model Conversation {
   @@index([assignedToId])
 }
 
+/// Maps a transport-specific chat id to the stable domain conversation. Old
+/// Historical bridge identifiers remain in Conversation.jid; browser ids are
+/// attached here so historical threads are never duplicated during relinking.
+model ConversationExternalIdentity {
+  id              String             @id @default(cuid())
+  accountId       String
+  conversationId  String
+  bridgeType      WhatsAppBridgeType
+  externalChatId  String
+  type            ConversationType
+  normalizedPhone String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  account         WhatsAppAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation    Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, bridgeType, externalChatId])
+  @@index([conversationId])
+  @@index([accountId, normalizedPhone])
+}
+
 model Message {
-  id               String            @id @default(cuid())
-  accountId        String
-  externalId       String
-  conversationId   String
-  direction        MessageDirection
-  senderJid        String
-  receiptParticipant String?
-  body             String?
-  messageType      String
-  sentAt           DateTime
-  importedAt       DateTime          @default(now())
-  isRead           Boolean           @default(false)
-  account          WhatsAppAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  conversation     Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  mediaAttachments MediaAttachment[]
+  id                  String               @id @default(cuid())
+  accountId           String
+  externalId          String
+  conversationId      String
+  direction           MessageDirection
+  senderJid           String
+  receiptParticipant  String?
+  body                String?
+  messageType         String
+  sentAt              DateTime
+  importedAt          DateTime             @default(now())
+  isRead              Boolean              @default(false)
+  account             WhatsAppAccount      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation        Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  mediaAttachments    MediaAttachment[]
   readReceiptRequests ReadReceiptMessage[]
 
   @@unique([accountId, externalId])
@@ -349,21 +378,21 @@ model Message {
 }
 
 model ReadReceiptRequest {
-  id            String            @id @default(cuid())
-  accountId     String
+  id             String               @id @default(cuid())
+  accountId      String
   conversationId String
-  requestedById String
-  status        ReadReceiptStatus @default(PENDING)
-  attemptCount  Int               @default(0)
-  lastAttemptAt DateTime?
-  safeError     String?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-  sentAt        DateTime?
-  account       WhatsAppAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  conversation  Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  requestedBy   User              @relation(fields: [requestedById], references: [id], onDelete: Restrict)
-  messages      ReadReceiptMessage[]
+  requestedById  String
+  status         ReadReceiptStatus    @default(PENDING)
+  attemptCount   Int                  @default(0)
+  lastAttemptAt  DateTime?
+  safeError      String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  sentAt         DateTime?
+  account        WhatsAppAccount      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation   Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  requestedBy    User                 @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  messages       ReadReceiptMessage[]
 
   @@index([accountId, status, createdAt])
   @@index([conversationId])
@@ -371,7 +400,7 @@ model ReadReceiptRequest {
 
 model ReadReceiptMessage {
   requestId String
-  messageId String @unique
+  messageId String             @unique
   request   ReadReceiptRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   message   Message            @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
@@ -379,34 +408,34 @@ model ReadReceiptMessage {
 }
 
 model HistoryRecoveryRequest {
-  id                String                @id @default(cuid())
-  accountId         String
-  conversationId    String
-  requestedById     String
-  fromAt            DateTime
-  toAt              DateTime
-  status            HistoryRecoveryStatus @default(PENDING)
-  anchorExternalId  String
-  anchorSentAt      DateTime
-  anchorFromMe      Boolean               @default(false)
-  baileysRequestId  String?
-  pageCount         Int                   @default(0)
-  receivedCount     Int                   @default(0)
-  importedCount     Int                   @default(0)
-  duplicateCount    Int                   @default(0)
-  attemptCount      Int                   @default(0)
-  lastAttemptAt     DateTime?
-  safeError         String?
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
-  completedAt       DateTime?
-  account           WhatsAppAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  conversation      Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  requestedBy       User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  id               String                @id @default(cuid())
+  accountId        String
+  conversationId   String
+  requestedById    String
+  fromAt           DateTime
+  toAt             DateTime
+  status           HistoryRecoveryStatus @default(PENDING)
+  anchorExternalId String
+  anchorSentAt     DateTime
+  anchorFromMe     Boolean               @default(false)
+  bridgeRequestId  String?                @map("baileysRequestId")
+  pageCount        Int                   @default(0)
+  receivedCount    Int                   @default(0)
+  importedCount    Int                   @default(0)
+  duplicateCount   Int                   @default(0)
+  attemptCount     Int                   @default(0)
+  lastAttemptAt    DateTime?
+  safeError        String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  completedAt      DateTime?
+  account          WhatsAppAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation     Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  requestedBy      User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
 
   @@index([accountId, status, createdAt])
   @@index([conversationId, createdAt])
-  @@index([baileysRequestId])
+  @@index([bridgeRequestId])
 }
 
 model MediaAttachment {
