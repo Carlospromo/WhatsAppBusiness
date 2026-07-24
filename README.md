@@ -72,6 +72,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `PUPPETEER_NO_SANDBOX` | `true` dentro de Railway porque su runtime bloquea los *namespaces* del sandbox de Chromium; en local debe permanecer `false` salvo necesidad equivalente. |
 | `WA_WEB_CLIENT_READY_TIMEOUT_SECONDS` | Tiempo máximo de inicio del cliente (30–600). |
 | `WA_WEB_READY_PROBE_DELAY_SECONDS` | Espera antes del sondeo de compatibilidad tras `authenticated` (5–90; predeterminado 25). No es un intervalo de sincronización. |
+| `WA_WEB_HEALTHCHECK_SECONDS` | Comprobación de salud del navegador cada 15–300 s (predeterminado 60). Solo consulta el estado de sesión; no lee chats ni sondea mensajes. Tras dos fallos recrea el navegador conservando el perfil. |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
 | `WA_WEB_INBOUND_RECONCILE_SECONDS` | Respaldo de entradas con APIs públicas del navegador (10–300; predeterminado 30). |
 | `WA_WEB_INBOUND_RECONCILE_LIMIT` | Máximo de mensajes recientes por chat cambiado en cada ciclo (1–100; predeterminado 25). |
@@ -83,6 +84,8 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 No reutilices `AUTH_SECRET` como clave de R2. No guardes variables reales en Git.
 
 Las variables históricas `WA_AUTH_DIR`, `WA_CONNECTION_MODE`, `WA_SYNC_INTERVAL_SECONDS`, `WA_SYNC_WINDOW_SECONDS` y `WA_SYNC_CONNECT_TIMEOUT_SECONDS` ya no se usan y deben eliminarse de Railway para evitar confusión. `MEDIA_ENCRYPTION_KEY` tampoco es necesaria con este bridge: no se conservan envoltorios de descarga del bridge anterior.
+
+La dependencia de WhatsApp Web incluye un parche reproducible en `patches/whatsapp-web.js+1.34.7.patch`. El cliente web puede no serializar algún grupo temporalmente; el parche evita que ese grupo impida la reconciliación acotada del resto de chats. Se aplica automáticamente mediante `postinstall` y no cambia el protocolo ni la sesión.
 
 ## Medios
 
