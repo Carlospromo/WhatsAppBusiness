@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeWebMessage, phoneFromWebChatId } from "../lib/whatsapp/normalize-web-message";
+import { phoneFromConversationJid } from "../lib/conversation-identity";
 
 describe("whatsapp-web.js message normalization", () => {
   it("normalizes direct text messages", () => {
@@ -33,5 +34,10 @@ describe("whatsapp-web.js message normalization", () => {
   it("accepts a direct LID identity without inventing a phone number", () => {
     const result = normalizeWebMessage({ id: { _serialized: "lid-1" }, from: "123456789@lid", body: "Hola", type: "chat", timestamp: 100 });
     expect(result).toMatchObject({ conversationJid: "123456789@lid", conversationType: "DIRECT", direction: "INBOUND", phoneJid: undefined });
+  });
+
+  it("keeps a visible fallback phone for browser direct conversations", () => {
+    expect(phoneFromConversationJid("34600000000@c.us")).toBe("+34600000000");
+    expect(phoneFromConversationJid("123456789@lid")).toBeNull();
   });
 });

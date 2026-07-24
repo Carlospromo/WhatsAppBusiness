@@ -8,7 +8,7 @@ import { WhatsAppBridgeType, WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "./lib/prisma";
 import { auditConnection, updateConnection } from "./lib/whatsapp/connection";
 import { maskPhone, normalizeWebMessage, type WebMessageLike } from "./lib/whatsapp/normalize-web-message";
-import { persistMessage, upsertContact } from "./lib/whatsapp/persistence";
+import { linkLidContactToPhone, persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
 import { attachOutboundExternalId, cancelOutboundDelivery, cancelOutboundRequest, claimNextOutboundRequest, completeOutboundRequest, failStaleOutboundRequests, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
 import { resolveOutboundDestination } from "./lib/whatsapp/outbound-destination";
@@ -32,6 +32,11 @@ const readinessProbeDelayMs = Math.min(
 const accountCheckMs = Math.max(5_000, Number(process.env.WA_ACCOUNT_CHECK_SECONDS ?? 15) * 1_000);
 const inboundReconcileMs = Math.max(10_000, Number(process.env.WA_WEB_INBOUND_RECONCILE_SECONDS ?? 30) * 1_000);
 const inboundReconcileLimit = Math.max(1, Math.min(100, Number(process.env.WA_WEB_INBOUND_RECONCILE_LIMIT ?? 25)));
+// A Chromium process can become idle or lose its WebSocket without causing the
+// Node worker to exit. Probe the public client state at a low frequency so the
+// worker can recreate only an unhealthy browser and keep live inbound events
+// reliable. This is a health check, not message polling.
+const connectionHealthCheckMs = Math.max(15_000, Number(process.env.WA_WEB_HEALTHCHECK_SECONDS ?? 60) * 1_000);
 const clients = new Map<string, WhatsAppWebClient>();
 const readyAccounts = new Set<string>();
 const authenticatedAccounts = new Set<string>();
@@ -43,11 +48,14 @@ const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const reconnectAttempts = new Map<string, number>();
 const readyTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const readinessProbeTimers = new Map<string, ReturnType<typeof setInterval>>();
+const connectionHealthTimers = new Map<string, ReturnType<typeof setInterval>>();
+const connectionHealthFailures = new Map<string, number>();
 const browserDiagnosticsAttached = new WeakSet<object>();
 const inboundWatermarks = new Map<string, Map<string, number>>();
 const inboundStartedAt = new Map<string, Date>();
 const inboundReconcileFailures = new Map<string, number>();
 const inboundReconciliationDisabled = new Set<string>();
+const lidPhoneResolutionAttempts = new Set<string>();
 let stopping = false;
 let outboundTimer: ReturnType<typeof setInterval> | undefined;
 let mediaTimer: ReturnType<typeof setInterval> | undefined;
@@ -82,8 +90,85 @@ function clearReadinessProbe(accountId: string) {
   readinessProbeTimers.delete(accountId);
 }
 
+function clearConnectionHealthCheck(accountId: string) {
+  const timer = connectionHealthTimers.get(accountId);
+  if (timer) clearInterval(timer);
+  connectionHealthTimers.delete(accountId);
+  connectionHealthFailures.delete(accountId);
+}
+
+function clearLidPhoneResolutionAttempts(accountId: string) {
+  const prefix = `${accountId}:`;
+  for (const key of lidPhoneResolutionAttempts) if (key.startsWith(prefix)) lidPhoneResolutionAttempts.delete(key);
+}
+
 function safeConnectionState(state: unknown) {
   return typeof state === "string" && /^[A-Z_]{1,64}$/.test(state) ? state : "UNKNOWN";
+}
+
+/**
+ * Unlike an application-level message scan, this makes one public `getState`
+ * call per healthy account at a conservative interval. Its only purpose is to
+ * notice a ghost Chromium/WebSocket session and recreate that browser without
+ * deleting the persisted LocalAuth profile.
+ */
+function startConnectionHealthCheck(accountId: string, client: WhatsAppWebClient) {
+  clearConnectionHealthCheck(accountId);
+  const check = async () => {
+    if (stopping || clients.get(accountId) !== client || !readyAccounts.has(accountId)) return;
+    try {
+      if (!client.pupBrowser?.isConnected()) throw new Error("browser disconnected");
+      const state = safeConnectionState(await client.getState());
+      if (state !== "CONNECTED") throw new Error(`client state ${state}`);
+      connectionHealthFailures.delete(accountId);
+    } catch (error) {
+      const failures = (connectionHealthFailures.get(accountId) ?? 0) + 1;
+      connectionHealthFailures.set(accountId, failures);
+      operationalLog(
+        "connection.healthcheck_failed",
+        { account: safeLogRef(accountId), failures, ...safeErrorInfo(error) },
+        failures === 1 ? "error" : "debug",
+      );
+      // A single failed DevTools/state request can be transient. Two failed
+      // probes mean this client cannot receive events reliably, so replace it.
+      if (failures < 2 || clients.get(accountId) !== client) return;
+      operationalLog("connection.reconnect_required", { account: safeLogRef(accountId), reason: "HEALTHCHECK" }, "error");
+      await closeClient(accountId, client);
+      if (stopping || !(await isAccountActive(accountId))) return;
+      await updateConnection(accountId, {
+        status: WhatsAppConnectionStatus.ERROR,
+        qrCode: null,
+        qrExpiresAt: null,
+        lastError: "La sesión de WhatsApp Web dejó de responder; se está reconectando.",
+        bridgeType: WhatsAppBridgeType.WWEBJS,
+      });
+      await auditConnection(accountId, "WHATSAPP_WEB_HEALTH_RECONNECT");
+      scheduleReconnect(accountId);
+    }
+  };
+  connectionHealthTimers.set(accountId, setInterval(() => void check(), connectionHealthCheckMs));
+  operationalLog("connection.healthcheck_started", { account: safeLogRef(accountId), intervalMs: connectionHealthCheckMs }, "debug");
+}
+
+function attachBrowserDisconnectRecovery(accountId: string, client: WhatsAppWebClient) {
+  const browser = client.pupBrowser;
+  if (!browser || browserDiagnosticsAttached.has(browser)) return;
+  browserDiagnosticsAttached.add(browser);
+  browser.once("disconnected", () => void enqueueAccountWork(accountId, async () => {
+    if (clients.get(accountId) !== client || stopping) return;
+    operationalLog("connection.browser_disconnected", { account: safeLogRef(accountId) }, "error");
+    await closeClient(accountId, client);
+    if (!(await isAccountActive(accountId))) return;
+    await updateConnection(accountId, {
+      status: WhatsAppConnectionStatus.ERROR,
+      qrCode: null,
+      qrExpiresAt: null,
+      lastError: "El navegador de WhatsApp Web se cerró; se está reconectando.",
+      bridgeType: WhatsAppBridgeType.WWEBJS,
+    });
+    await auditConnection(accountId, "WHATSAPP_WEB_BROWSER_DISCONNECTED");
+    scheduleReconnect(accountId);
+  }));
 }
 
 function attachBrowserDiagnostics(accountId: string, client: WhatsAppWebClient) {
@@ -120,6 +205,8 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
   await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: accountIdFromClient, maskedPhone: maskPhone(accountIdFromClient), lastError: null, bridgeType: WhatsAppBridgeType.WWEBJS });
   await auditConnection(accountId, source === "ready_event" ? "WHATSAPP_CONNECTED" : "WHATSAPP_CONNECTED_STATE_VERIFIED");
   await presence.markIdle(accountId, client);
+  attachBrowserDisconnectRecovery(accountId, client);
+  startConnectionHealthCheck(accountId, client);
   operationalLog("connection.open", { account: safeLogRef(accountId), source });
   // Baseline reconciliation is best-effort after a real ready event. It is a
   // recovery aid only; incoming `message` events are already wired above.
@@ -303,6 +390,8 @@ async function closeClient(accountId: string, client?: WhatsAppWebClient) {
     inboundReconciliationDisabled.delete(accountId);
     clearReadyTimer(accountId);
     clearReadinessProbe(accountId);
+    clearConnectionHealthCheck(accountId);
+    clearLidPhoneResolutionAttempts(accountId);
     return;
   }
   if (clients.get(accountId) === active) clients.delete(accountId);
@@ -314,6 +403,8 @@ async function closeClient(accountId: string, client?: WhatsAppWebClient) {
   inboundReconciliationDisabled.delete(accountId);
   clearReadyTimer(accountId);
   clearReadinessProbe(accountId);
+  clearConnectionHealthCheck(accountId);
+  clearLidPhoneResolutionAttempts(accountId);
   await presence.dispose(accountId, active);
   try { await active.destroy(); } catch { /* Browser can already be gone. */ }
   stopQueueProcessorsIfIdle();
@@ -326,6 +417,31 @@ async function contactFromMessage(accountId: string, message: Message) {
     if (chatId) await upsertContact(accountId, { chatId, displayName: contact.name ?? contact.shortName ?? null, pushName: contact.pushname ?? null });
   } catch {
     // Contact metadata is optional and must never block a message.
+  }
+}
+
+/**
+ * WhatsApp Web can deliver a direct chat as an LID before it exposes its phone
+ * identity. Ask the bridge for that one known contact only; never infer a
+ * number from the LID or enumerate numbers. A failed lookup is deliberately
+ * not retried until the browser is recreated, because the next normal contact
+ * update can supply the mapping.
+ */
+async function resolveIncomingLidPhone(accountId: string, client: WhatsAppWebClient, conversationJid: string) {
+  if (!conversationJid.endsWith("@lid") || clients.get(accountId) !== client) return;
+  const key = `${accountId}:${conversationJid}`;
+  if (lidPhoneResolutionAttempts.has(key)) return;
+  lidPhoneResolutionAttempts.add(key);
+  try {
+    const [resolved] = await client.getContactLidAndPhone([conversationJid]);
+    if (!resolved?.lid || !resolved.pn) {
+      operationalLog("contact.lid_phone_unavailable", { account: safeLogRef(accountId) }, "debug");
+      return;
+    }
+    const contact = await linkLidContactToPhone(accountId, resolved.lid, resolved.pn);
+    if (contact) operationalLog("contact.lid_phone_resolved", { account: safeLogRef(accountId) });
+  } catch (error) {
+    operationalLog("contact.lid_phone_resolution_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "debug");
   }
 }
 
@@ -345,6 +461,12 @@ async function persistInboundMessageEvent(accountId: string, client: WhatsAppWeb
   // the message-level deduplication for all subsequent events.
   if (persisted.created && persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, client, raw);
   if (persisted.created && message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, client, message.conversationJid);
+  // Resolve a directly received LID asynchronously after durable message
+  // persistence. A profile/contact lookup must never delay or discard inbound
+  // chat data if the public resolver is temporarily unavailable.
+  if (persisted.created && message.conversationType === "DIRECT" && message.conversationJid.endsWith("@lid")) {
+    void enqueueAccountWork(accountId, () => resolveIncomingLidPhone(accountId, client, message.conversationJid));
+  }
   operationalLog("inbound.persisted", { account: safeLogRef(accountId), message: safeLogRef(message.externalId), created: persisted.created, source });
 }
 

@@ -9,7 +9,7 @@ type TechnicalContact = {
 };
 
 export function phoneFromConversationJid(jid: string) {
-  if (!jid.endsWith("@s.whatsapp.net")) return null;
+  if (!jid.endsWith("@s.whatsapp.net") && !jid.endsWith("@c.us")) return null;
   const digits = jid.slice(0, jid.indexOf("@")).split(":")[0].replace(/\D/g, "");
   return digits.length >= 7 && digits.length <= 15 ? `+${digits}` : null;
 }

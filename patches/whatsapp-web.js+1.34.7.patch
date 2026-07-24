@@ -1,0 +1,21 @@
+diff --git a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
+index dfa30a5..fd69615 100644
+--- a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
++++ b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
+@@ -920,7 +920,13 @@ exports.LoadUtils = () => {
+     window.WWebJS.getChats = async () => {
+         const chats = window.require('WAWebCollections').Chat.getModelsArray();
+-        const chatPromises = chats.map((chat) =>
+-            window.WWebJS.getChatModel(chat),
++        // A single stale or partially synchronized group must not make the
++        // entire chat list unavailable. getChats is used by integrations as a
++        // bounded recovery aid, so preserve every serializable chat and leave
++        // the failing one for WhatsApp Web to refresh normally.
++        const chatResults = await Promise.allSettled(
++            chats.map((chat) => window.WWebJS.getChatModel(chat)),
+         );
+-        return await Promise.all(chatPromises);
++        return chatResults
++            .filter((result) => result.status === 'fulfilled' && result.value)
++            .map((result) => result.value);
+     };

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { AddressBookContactOrigin, MediaAttachmentStatus, WhatsAppBridgeType } from "@prisma/client";
 import { randomUUID } from "node:crypto";
-import { reconcileWhatsAppContact } from "@/lib/address-book";
+import { phoneFromJid, reconcileWhatsAppContact } from "@/lib/address-book";
 import { previewForMessage, phoneFromWebChatId, type NormalizedWebMessage } from "./normalize-web-message";
 import { messageRecordData } from "./message-record";
 
@@ -17,6 +17,41 @@ export async function upsertContact(accountId: string, contact: { chatId: string
     pushName: contact.pushName,
     origin: AddressBookContactOrigin.WHATSAPP_SYNC,
   });
+}
+
+/**
+ * An inbound WhatsApp Web chat can initially be addressed by an LID. Once the
+ * bridge's public resolver supplies its matching phone identity, retain that
+ * transport LID and attach the verified phone to the existing contact/thread.
+ * No number is inferred from the LID and this never enumerates contacts.
+ */
+export async function linkLidContactToPhone(accountId: string, lidJid: string, phoneJid: string) {
+  if (!lidJid.endsWith("@lid")) return null;
+  const phone = phoneFromJid(phoneJid);
+  if (!phone) return null;
+  const contact = await reconcileWhatsAppContact(accountId, {
+    jid: lidJid,
+    phoneJid,
+    origin: AddressBookContactOrigin.EXTERNAL,
+  });
+  await prisma.$transaction([
+    prisma.conversationExternalIdentity.updateMany({
+      where: { accountId, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: lidJid },
+      data: { normalizedPhone: phone },
+    }),
+    prisma.conversation.updateMany({
+      where: {
+        accountId,
+        type: "DIRECT",
+        OR: [
+          { jid: lidJid },
+          { externalIdentities: { some: { bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: lidJid } } },
+        ],
+      },
+      data: { contactId: contact.id },
+    }),
+  ]);
+  return contact;
 }
 
 async function resolveConversation(accountId: string, message: NormalizedWebMessage, contactId: string | null | undefined) {
