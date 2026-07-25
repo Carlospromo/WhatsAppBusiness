@@ -54,12 +54,17 @@ export async function linkLidContactToPhone(accountId: string, lidJid: string, p
   return contact;
 }
 
-async function resolveConversation(accountId: string, message: NormalizedWebMessage, contactId: string | null | undefined) {
+type ConversationResolution = "BRIDGE_IDENTITY" | "LEGACY_PHONE" | "LEGACY_GROUP" | "NEW";
+
+async function resolveConversation(accountId: string, message: NormalizedWebMessage, contactId: string | null | undefined): Promise<{ conversation: { id: string }; resolution: ConversationResolution }> {
   const existingIdentity = await prisma.conversationExternalIdentity.findUnique({
     where: { accountId_bridgeType_externalChatId: { accountId, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: message.conversationJid } },
     select: { conversationId: true },
   });
-  if (existingIdentity) return prisma.conversation.findUniqueOrThrow({ where: { id: existingIdentity.conversationId } });
+  if (existingIdentity) return {
+    conversation: await prisma.conversation.findUniqueOrThrow({ where: { id: existingIdentity.conversationId }, select: { id: true } }),
+    resolution: "BRIDGE_IDENTITY",
+  };
 
   const phone = message.conversationType === "DIRECT" ? phoneFromWebChatId(message.conversationJid) : null;
   const legacyConversation = phone
@@ -72,13 +77,19 @@ async function resolveConversation(accountId: string, message: NormalizedWebMess
       : null;
   const conversation = legacyConversation ?? await prisma.conversation.create({
     data: { accountId, jid: message.conversationJid, type: message.conversationType, contactId: contactId ?? null },
+    select: { id: true },
   });
   await prisma.conversationExternalIdentity.upsert({
     where: { accountId_bridgeType_externalChatId: { accountId, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: message.conversationJid } },
     create: { accountId, conversationId: conversation.id, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: message.conversationJid, type: message.conversationType, normalizedPhone: phone },
     update: { normalizedPhone: phone },
   });
-  return conversation;
+  return {
+    conversation,
+    resolution: legacyConversation
+      ? phone ? "LEGACY_PHONE" : "LEGACY_GROUP"
+      : "NEW",
+  };
 }
 
 export async function persistMessage(accountId: string, message: NormalizedWebMessage) {
@@ -88,10 +99,10 @@ export async function persistMessage(accountId: string, message: NormalizedWebMe
   // Identity metadata may arrive again with a replayed event. Reconcile it
   // before deduplicating the message so an existing LID contact gains its phone.
   const exists = await prisma.message.findUnique({ where: { accountId_externalId: { accountId, externalId: message.externalId } }, include: { mediaAttachments: { select: { id: true, status: true } } } });
-  if (exists) return { created: false, mediaAttachment: exists.mediaAttachments[0] ?? null };
+  if (exists) return { created: false, mediaAttachment: exists.mediaAttachments[0] ?? null, conversationResolution: "DUPLICATE" as const };
   try {
     return await prisma.$transaction(async (transaction) => {
-      const conversation = await resolveConversation(accountId, message, contact?.id);
+      const { conversation, resolution } = await resolveConversation(accountId, message, contact?.id);
       await transaction.conversation.update({
         where: { id: conversation.id },
         data: { contactId: contact?.id ?? undefined, lastMessageAt: message.sentAt, lastMessagePreview: previewForMessage(message), unreadCount: message.direction === "INBOUND" ? { increment: 1 } : undefined },
@@ -116,10 +127,10 @@ export async function persistMessage(accountId: string, message: NormalizedWebMe
           select: { id: true, status: true },
         })
         : null;
-      return { created: true, mediaAttachment };
+      return { created: true, mediaAttachment, conversationResolution: resolution };
     });
   } catch (error) {
-    if ((error as { code?: string }).code === "P2002") return { created: false, mediaAttachment: null };
+    if ((error as { code?: string }).code === "P2002") return { created: false, mediaAttachment: null, conversationResolution: "DUPLICATE" as const };
     throw error;
   }
 }

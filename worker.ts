@@ -445,6 +445,11 @@ async function resolveIncomingLidPhone(accountId: string, client: WhatsAppWebCli
   }
 }
 
+function inboundIdentityKind(conversationJid: string, conversationType: "DIRECT" | "GROUP") {
+  if (conversationType === "GROUP") return "GROUP";
+  return conversationJid.endsWith("@c.us") ? "DIRECT_PHONE" : conversationJid.endsWith("@lid") ? "DIRECT_LID" : "DIRECT_UNKNOWN";
+}
+
 async function persistInboundMessageEvent(accountId: string, client: WhatsAppWebClient, raw: Message, source: "message" | "message_create" | "reconcile") {
   const eventExternalId = raw.id?._serialized ?? raw.id?.id ?? "unknown";
   const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
@@ -454,8 +459,30 @@ async function persistInboundMessageEvent(accountId: string, client: WhatsAppWeb
     operationalLog("inbound.event_ignored", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), reason: "unsupported_or_outbound", source }, "debug");
     return;
   }
+  const identityKind = inboundIdentityKind(message.conversationJid, message.conversationType);
+  operationalLog("inbound.normalized", {
+    account: safeLogRef(accountId),
+    message: safeLogRef(message.externalId),
+    source,
+    identityKind,
+    messageType: message.messageType,
+    hasBody: Boolean(message.body),
+    hasMedia: Boolean(message.media),
+  });
   await contactFromMessage(accountId, raw);
-  const persisted = await presence.duringActivity(accountId, client, () => persistMessage(accountId, message));
+  let persisted: Awaited<ReturnType<typeof persistMessage>>;
+  try {
+    persisted = await presence.duringActivity(accountId, client, () => persistMessage(accountId, message));
+  } catch (error) {
+    operationalLog("inbound.persistence_failed", {
+      account: safeLogRef(accountId),
+      message: safeLogRef(message.externalId),
+      source,
+      identityKind,
+      ...safeErrorInfo(error),
+    }, "error");
+    throw error;
+  }
   // Both public events can be emitted for the same inbound message. Only the
   // creator owns its media transfer and contact refresh; PostgreSQL enforces
   // the message-level deduplication for all subsequent events.
@@ -467,7 +494,14 @@ async function persistInboundMessageEvent(accountId: string, client: WhatsAppWeb
   if (persisted.created && message.conversationType === "DIRECT" && message.conversationJid.endsWith("@lid")) {
     void enqueueAccountWork(accountId, () => resolveIncomingLidPhone(accountId, client, message.conversationJid));
   }
-  operationalLog("inbound.persisted", { account: safeLogRef(accountId), message: safeLogRef(message.externalId), created: persisted.created, source });
+  operationalLog("inbound.persisted", {
+    account: safeLogRef(accountId),
+    message: safeLogRef(message.externalId),
+    created: persisted.created,
+    source,
+    identityKind,
+    conversationResolution: persisted.conversationResolution,
+  });
 }
 
 async function syncKnownContacts(accountId: string, client: WhatsAppWebClient) {
@@ -583,6 +617,7 @@ async function connect(accountId: string) {
         await completeOutboundRequest(accountId, externalId);
       }
     }));
+    operationalLog("inbound.event_listeners_registered", { account: safeLogRef(accountId), bridge: "WWEBJS" });
     await activeClient.initialize();
   } catch (error) {
     // whatsapp-web.js can report a late ready/injection failure after the

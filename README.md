@@ -87,6 +87,8 @@ Las variables históricas `WA_AUTH_DIR`, `WA_CONNECTION_MODE`, `WA_SYNC_INTERVAL
 
 La dependencia de WhatsApp Web incluye un parche reproducible en `patches/whatsapp-web.js+1.34.7.patch`. El cliente web puede no serializar algún grupo temporalmente; el parche evita que ese grupo impida la reconciliación acotada del resto de chats. Se aplica automáticamente mediante `postinstall` y no cambia el protocolo ni la sesión.
 
+Los deploy logs registran las fases seguras de cada entrada: `inbound.event_received`, `inbound.normalized`, `inbound.persisted` o `inbound.persistence_failed`. Solo contienen hashes cortos, tipo de identidad (`DIRECT_PHONE`, `DIRECT_LID` o `GROUP`), tipo de mensaje y resultado de conciliación; nunca teléfonos, identificadores de chat ni contenido.
+
 ## Medios
 
 Se aceptan únicamente imágenes, audio y vídeo de tamaño reducido. `whatsapp-web.js` entrega los medios como Base64, no como stream; por ello los límites son deliberadamente más bajos que los de una integración de streaming. Los estados, documentos, stickers, ubicaciones, llamadas, mensajes efímeros y “ver una vez” se descartan. Base64, claves, URL de WhatsApp, QR y perfiles nunca se almacenan en PostgreSQL.

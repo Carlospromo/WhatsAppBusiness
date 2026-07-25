@@ -13,6 +13,10 @@ describe("WhatsApp Web worker runtime", () => {
     expect(worker).toContain("WA_WEB_READY_PROBE_DELAY_SECONDS");
     expect(worker).toContain("WA_WEB_HEALTHCHECK_SECONDS");
     expect(worker).toContain("getContactLidAndPhone([conversationJid])");
+    expect(worker).toContain("inbound.event_listeners_registered");
+    expect(worker).toContain("inbound.normalized");
+    expect(worker).toContain("inbound.persistence_failed");
+    expect(worker).toContain("conversationResolution");
     expect(worker).toContain('source === "state_probe" && !(await primeInboundReconciliation(accountId, client))');
     expect(worker).toContain("inboundReconciliationDisabled");
     expect(patch).toContain("Promise.allSettled");
