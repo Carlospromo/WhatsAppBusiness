@@ -31,8 +31,8 @@ positiveInteger("WA_WEB_MAX_IMAGE_BYTES", 10 * 1024 * 1024, 1, 40 * 1024 * 1024)
 positiveInteger("WA_WEB_MAX_AUDIO_BYTES", 20 * 1024 * 1024, 1, 40 * 1024 * 1024);
 positiveInteger("WA_WEB_MAX_VIDEO_BYTES", 25 * 1024 * 1024, 1, 40 * 1024 * 1024);
 for (const [name, fallback, minimum, maximum] of [
-  ["WA_OUTBOUND_MAX_PENDING", 20, 1, 500],
-  ["WA_OUTBOUND_MAX_PER_MINUTE", 6, 1, 60],
-  ["WA_OUTBOUND_MIN_INTERVAL_SECONDS", 5, 1, 300],
-  ["WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY", 10, 1, 100],
+  ["WA_OUTBOUND_MAX_PENDING", 10, 1, 50],
+  ["WA_OUTBOUND_MAX_PER_MINUTE", 3, 1, 6],
+  ["WA_OUTBOUND_MIN_INTERVAL_SECONDS", 15, 10, 300],
+  ["WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY", 3, 1, 10],
 ]) positiveInteger(name, fallback, minimum, maximum);

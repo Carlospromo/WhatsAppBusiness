@@ -5,10 +5,10 @@ import { MAX_OUTBOUND_ATTEMPTS, OUTBOUND_CONFIRMATION_TIMEOUT_MESSAGE, OUTBOUND_
 describe("outbound safety limits", () => {
   it("uses conservative defaults", () => {
     expect(outboundSafetyLimits({})).toEqual({
-      maxPending: 20,
-      maxPerMinute: 6,
-      minIntervalMs: 5_000,
-      maxNewChatsPerDay: 10,
+      maxPending: 10,
+      maxPerMinute: 3,
+      minIntervalMs: 15_000,
+      maxNewChatsPerDay: 3,
     });
   });
 
@@ -16,10 +16,11 @@ describe("outbound safety limits", () => {
     expect(outboundSafetyLimits({
       WA_OUTBOUND_MAX_PENDING: "25",
       WA_OUTBOUND_MAX_PER_MINUTE: "4",
-      WA_OUTBOUND_MIN_INTERVAL_SECONDS: "8",
+      WA_OUTBOUND_MIN_INTERVAL_SECONDS: "12",
       WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY: "7",
-    })).toEqual({ maxPending: 25, maxPerMinute: 4, minIntervalMs: 8_000, maxNewChatsPerDay: 7 });
+    })).toEqual({ maxPending: 25, maxPerMinute: 4, minIntervalMs: 12_000, maxNewChatsPerDay: 7 });
     expect(() => outboundSafetyLimits({ WA_OUTBOUND_MAX_PER_MINUTE: "0" })).toThrow("WA_OUTBOUND_MAX_PER_MINUTE");
+    expect(() => outboundSafetyLimits({ WA_OUTBOUND_MIN_INTERVAL_SECONDS: "5" })).toThrow("WA_OUTBOUND_MIN_INTERVAL_SECONDS");
   });
 
   it("returns a safe message without technical restriction details", () => {

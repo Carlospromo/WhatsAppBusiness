@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { AddressBookContactOrigin, AddressBookContactStatus } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessAccount } from "@/lib/account";
 import { normalizePhone } from "@/lib/address-book";
@@ -35,6 +36,25 @@ export async function POST(request: Request) {
     },
     select: { id: true },
   });
+  // A new outreach must start from an explicitly maintained, verified
+  // address-book contact. Replies to a pre-existing conversation are still
+  // allowed under the normal queue limits.
+  if (!existingConversation) {
+    const consentedContact = await prisma.addressBookPhone.findFirst({
+      where: {
+        accountId,
+        normalizedPhone: phone,
+        addressBookContact: {
+          origin: { in: [AddressBookContactOrigin.IMPORTED, AddressBookContactOrigin.MANUAL] },
+          status: AddressBookContactStatus.VERIFIED,
+        },
+      },
+      select: { id: true },
+    });
+    if (!consentedContact) {
+      return NextResponse.json({ error: "Para iniciar una conversación nueva, el número debe estar en la agenda importada o creada manualmente como contacto verificado." }, { status: 422 });
+    }
+  }
   const safety = await canQueueOutbound(accountId, !existingConversation);
   if (!safety.allowed) { operationalLog("outbound.queue_rejected", { account: safeLogRef(accountId), source: "direct", reason: safety.reason }); return NextResponse.json({ error: safeOutboundSafetyMessage(safety.reason) }, { status: 429 }); }
   const created = await createDirectConversationAndQueue(accountId, user.id, phone, body);
