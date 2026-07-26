@@ -20,7 +20,7 @@ El worker no persiste una copia local del HTML de WhatsApp Web: así evita reuti
 
 - Múltiples cuentas aisladas con miembros y roles globales `ADMIN`, `AGENT` y `VIEWER`.
 - Gestión de cuentas para administradores: crear, renombrar, desactivar de forma recuperable y administrar accesos.
-- Bandeja de conversaciones, contactos, agenda híbrida, notas, etiquetas y asignaciones.
+- Bandeja de conversaciones, agenda híbrida, notas, etiquetas y asignaciones. La agenda es el único catálogo visible de contactos.
 - Envío manual con cola persistente, límites preventivos y confirmación mediante acuse del cliente web.
 - Lectura sincronizada al abrir realmente una conversación, mediante cola persistente.
 - Recepción de imágenes, audios y vídeos pequeños; PostgreSQL conserva metadatos y Cloudflare R2 privado almacena los archivos.

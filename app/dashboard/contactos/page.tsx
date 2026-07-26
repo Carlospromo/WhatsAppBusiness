@@ -1,12 +1,15 @@
-import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth";
-import { accountsForUser, canAccessAccount } from "@/lib/account";
-import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 
-export default async function ContactsPage({ searchParams }: { searchParams: Promise<{ q?: string; account?: string }> }) {
-  const user = await getCurrentUser(); if (!user) return null; const params = await searchParams;
-  const accounts = await accountsForUser(user); const accountId = params.account && await canAccessAccount(user, params.account) ? params.account : undefined;
-  const allowed = accounts.filter((account) => account.isActive).map((account) => account.id); const q = params.q?.trim().slice(0, 100);
-  const contacts = await prisma.contact.findMany({ where: { accountId: accountId ?? { in: allowed }, ...(q ? { OR: [{ displayName: { contains: q } }, { pushName: { contains: q } }, { phone: { contains: q } }, { addressBookContact: { displayName: { contains: q } } }] } : {}) }, include: { account: { select: { name: true } }, addressBookContact: { select: { id: true, displayName: true, origin: true } }, conversations: { select: { id: true }, take: 1 } }, orderBy: { syncedAt: "desc" }, take: 30 });
-  return <main className="mx-auto max-w-3xl p-6"><div className="flex justify-between"><Link href="/dashboard" className="text-sm text-emerald-700">← Conversaciones</Link><Link href="/dashboard/agenda" className="text-sm text-emerald-700">Agenda</Link></div><h1 className="mt-3 text-xl font-semibold">Contactos de WhatsApp</h1><nav className="mt-3 flex gap-3 overflow-auto text-sm"><Link href="/dashboard/contactos" className={!accountId ? "font-semibold text-emerald-700" : "text-slate-500"}>Todas</Link>{accounts.map((account) => <Link key={account.id} href={`/dashboard/contactos?account=${account.id}`} className={accountId === account.id ? "font-semibold text-emerald-700" : "text-slate-500"}>{account.name}</Link>)}</nav><form className="my-4"><input type="hidden" name="account" value={accountId || ""}/><input name="q" defaultValue={q} placeholder="Buscar contacto" className="w-full rounded-md border p-2"/></form><div className="rounded-xl border">{contacts.length ? contacts.map((contact) => <div className="flex justify-between border-b p-4 last:border-0" key={contact.id}><div><p className="font-medium">{contact.addressBookContact?.displayName || contact.displayName || contact.pushName || "Sin nombre"}{contact.addressBookContact?.origin === "EXTERNAL" && <span className="ml-2 text-xs text-amber-700">Externo</span>}</p><p className="text-sm text-slate-500">{contact.phone ? `•••• ${contact.phone.slice(-4)}` : "Número no disponible"}{!accountId ? ` · ${contact.account.name}` : ""}</p></div>{contact.conversations[0] && <Link className="text-sm text-emerald-700" href={`/dashboard?selected=${contact.conversations[0].id}${accountId ? `&account=${accountId}` : ""}`}>Ver conversación</Link>}</div>) : <p className="p-4 text-sm text-slate-500">Aún no hay contactos sincronizados.</p>}</div></main>;
+/**
+ * The technical WhatsApp-identity view was retired in favour of the hybrid
+ * address book. Keep this redirect for existing bookmarks without exposing a
+ * second, potentially stale contact catalogue.
+ */
+export default async function ContactsPage({ searchParams }: { searchParams: Promise<{ q?: string; account?: string; origin?: string }> }) {
+  const params = await searchParams;
+  const query = new URLSearchParams();
+  if (params.account) query.set("account", params.account);
+  if (params.q) query.set("q", params.q);
+  if (params.origin) query.set("origin", params.origin);
+  redirect(`/dashboard/agenda${query.size ? `?${query.toString()}` : ""}`);
 }
