@@ -29,10 +29,10 @@ function positiveInteger(environment: Environment, name: string, fallback: numbe
 
 export function outboundSafetyLimits(environment: Environment = process.env): OutboundSafetyLimits {
   return {
-    maxPending: positiveInteger(environment, "WA_OUTBOUND_MAX_PENDING", 20, 1, 500),
-    maxPerMinute: positiveInteger(environment, "WA_OUTBOUND_MAX_PER_MINUTE", 6, 1, 60),
-    minIntervalMs: positiveInteger(environment, "WA_OUTBOUND_MIN_INTERVAL_SECONDS", 5, 1, 300) * 1_000,
-    maxNewChatsPerDay: positiveInteger(environment, "WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY", 10, 1, 100),
+    maxPending: positiveInteger(environment, "WA_OUTBOUND_MAX_PENDING", 10, 1, 50),
+    maxPerMinute: positiveInteger(environment, "WA_OUTBOUND_MAX_PER_MINUTE", 3, 1, 6),
+    minIntervalMs: positiveInteger(environment, "WA_OUTBOUND_MIN_INTERVAL_SECONDS", 15, 10, 300) * 1_000,
+    maxNewChatsPerDay: positiveInteger(environment, "WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY", 3, 1, 10),
   };
 }
 

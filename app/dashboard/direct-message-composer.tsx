@@ -24,6 +24,7 @@ export function DirectMessageComposer({ accountId, accountName, enabled, onQueue
   return <div className="fixed inset-0 z-50 flex items-end bg-slate-950/30 p-3 sm:items-center sm:justify-center" role="dialog" aria-modal="true" aria-label="Nuevo mensaje">
     <form onSubmit={send} className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
       <div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-semibold text-slate-900">Nuevo mensaje</h2><p className="mt-1 text-sm text-slate-500">Cuenta: {accountName}</p></div><button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm text-slate-500 hover:bg-slate-100">Cerrar</button></div>
+      <p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">Para iniciar una conversación nueva, el número debe pertenecer a un contacto verificado de la agenda importada o creado manualmente. Las respuestas a conversaciones existentes siguen disponibles.</p>
       <label className="mt-5 block text-sm font-medium text-slate-700" htmlFor="direct-phone">Número de teléfono</label>
       <input id="direct-phone" value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" autoComplete="tel" maxLength={64} placeholder="Ej.: +34 600 000 000" className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100" />
       <label className="mt-4 block text-sm font-medium text-slate-700" htmlFor="direct-body">Mensaje</label>

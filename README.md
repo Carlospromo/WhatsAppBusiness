@@ -19,11 +19,34 @@ El worker no persiste una copia local del HTML de WhatsApp Web: así evita reuti
 ## Funciones
 
 - Múltiples cuentas aisladas con miembros y roles globales `ADMIN`, `AGENT` y `VIEWER`.
+- Gestión de cuentas para administradores: crear, renombrar, desactivar de forma recuperable y administrar accesos.
 - Bandeja de conversaciones, contactos, agenda híbrida, notas, etiquetas y asignaciones.
 - Envío manual con cola persistente, límites preventivos y confirmación mediante acuse del cliente web.
 - Lectura sincronizada al abrir realmente una conversación, mediante cola persistente.
 - Recepción de imágenes, audios y vídeos pequeños; PostgreSQL conserva metadatos y Cloudflare R2 privado almacena los archivos.
 - Gestión administrativa, auditoría y panel de indicadores de operación.
+
+## Agenda y limpieza segura
+
+La agenda es una capa distinta de las conversaciones. Desde **Administración → Agenda híbrida**, un administrador puede usar **Borrar agenda de esta cuenta** y escribir `BORRAR AGENDA` para confirmarlo. La acción elimina únicamente contactos de agenda, teléfonos normalizados y lotes de importación de esa cuenta. Conserva las identidades técnicas de WhatsApp, conversaciones, mensajes, medios, colas y perfiles de sesión.
+
+Si fuera imprescindible hacerlo desde la consola PostgreSQL de Railway, realiza primero una copia de seguridad y ejecuta estas instrucciones dentro de una única transacción, sustituyendo `<ACCOUNT_ID>` por la cuenta afectada:
+
+```sql
+BEGIN;
+DELETE FROM "AddressBookPhone" WHERE "accountId" = '<ACCOUNT_ID>';
+DELETE FROM "AddressBookContact" WHERE "accountId" = '<ACCOUNT_ID>';
+DELETE FROM "ContactImport" WHERE "accountId" = '<ACCOUNT_ID>';
+COMMIT;
+```
+
+No ejecutes `DELETE` sobre `Contact`, `Conversation`, `Message`, `MediaAttachment` ni `OutboundMessageRequest` si quieres conservar los mensajes. La opción de la interfaz es preferible porque exige confirmación y deja auditoría.
+
+## Envío manual responsable
+
+Los mensajes solo se solicitan manualmente por un `ADMIN` o `AGENT`, pasan por una cola persistente y se muestran como enviados únicamente tras un acuse del cliente. Un rechazo, error o confirmación ausente se cancela de forma segura; no se reenvía de forma agresiva.
+
+Para iniciar una conversación nueva, el número debe existir como contacto `IMPORTED` o `MANUAL` verificado. Responder en una conversación que ya existe sigue permitido. Además, los valores predeterminados conservadores son una cola máxima de 10, tres intentos de despacho por minuto, 15 segundos mínimos entre despachos y tres conversaciones nuevas al día. Estos controles reducen el riesgo operativo, pero no sustituyen el consentimiento ni garantizan que WhatsApp acepte una acción: `whatsapp-web.js` no es una integración oficial.
 
 ## Persistencia y sesiones
 
@@ -77,7 +100,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `WA_WEB_INBOUND_RECONCILE_SECONDS` | Respaldo de entradas con APIs públicas del navegador (10–300; predeterminado 30). |
 | `WA_WEB_INBOUND_RECONCILE_LIMIT` | Máximo de mensajes recientes por chat cambiado en cada ciclo (1–100; predeterminado 25). |
 | `WA_WEB_MAX_MEDIA_BYTES`, `WA_WEB_MAX_IMAGE_BYTES`, `WA_WEB_MAX_AUDIO_BYTES`, `WA_WEB_MAX_VIDEO_BYTES` | Límites opcionales: global y por tipo para medios Base64. Si se omiten, se usan 25 MB globales, 10 MB para imágenes, 20 MB para audio y 25 MB para vídeo. |
-| `WA_OUTBOUND_MAX_PENDING`, `WA_OUTBOUND_MAX_PER_MINUTE`, `WA_OUTBOUND_MIN_INTERVAL_SECONDS`, `WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY` | Límites preventivos de envío manual. |
+| `WA_OUTBOUND_MAX_PENDING`, `WA_OUTBOUND_MAX_PER_MINUTE`, `WA_OUTBOUND_MIN_INTERVAL_SECONDS`, `WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY` | Límites preventivos de envío manual. Valores predeterminados: 10, 3, 15 y 3. |
 | `MEDIA_STORAGE=r2`, `R2_BUCKET`, `R2_ACCOUNT_ID`, `R2_ENDPOINT`, `R2_REGION`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Bucket R2 privado para medios. |
 | `LOG_LEVEL` | Nivel de logs de aplicación. |
 

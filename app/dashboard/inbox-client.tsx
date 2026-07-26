@@ -105,6 +105,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   const [conversationError, setConversationError] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [directComposerOpen, setDirectComposerOpen] = useState(false);
+  const [locallyReadIds, setLocallyReadIds] = useState<Set<string>>(() => new Set());
   const canManage = role === "ADMIN" || role === "AGENT";
 
   const pageUrl = useCallback((changes: { account?: string | null; filter?: string; selected?: string | null } = {}) => {
@@ -122,12 +123,23 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
 
   const markRead = useCallback(async (id: string) => {
     if (!canManage) return;
-    const response = await fetch(`/api/conversations/${id}/read`, { method: "POST" });
-    if (!response.ok) return;
+    // The badge is a local inbox indicator. Clear it immediately when the
+    // user actually opens the thread; the persisted read receipt follows in
+    // the background and never runs merely because a list was refreshed.
+    setLocallyReadIds((current) => new Set(current).add(id));
     setRows((current) => current.map((item) => item.id === id ? { ...item, unreadCount: 0 } : item));
     setDetail((current) => current?.conversation.id === id
       ? { ...current, conversation: { ...current.conversation, unreadCount: 0 } }
       : current);
+    const response = await fetch(`/api/conversations/${id}/read`, { method: "POST" });
+    if (response.ok) return;
+    // The server remains authoritative. A later refresh will restore the
+    // badge if this request could not be persisted.
+    setLocallyReadIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
   }, [canManage]);
 
   const loadConversation = useCallback(async (id: string, quiet = false) => {
@@ -139,20 +151,23 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
       const response = await fetch(`/api/conversations/${id}`, { cache: "no-store" });
       const data = await response.json().catch(() => null) as ConversationResponse | null;
       if (!response.ok || !data) throw new Error("conversation_unavailable");
-      setDetail(data);
+      const normalized = locallyReadIds.has(id)
+        ? { ...data, conversation: { ...data.conversation, unreadCount: 0 } }
+        : data;
+      setDetail(normalized);
       setRows((current) => {
-        const existing = current.find((item) => item.id === data.conversation.id);
+        const existing = current.find((item) => item.id === normalized.conversation.id);
         return existing
-          ? current.map((item) => item.id === data.conversation.id ? { ...item, ...data.conversation } : item)
-          : [data.conversation, ...current];
+          ? current.map((item) => item.id === normalized.conversation.id ? { ...item, ...normalized.conversation } : item)
+          : [normalized.conversation, ...current];
       });
-      if (data.conversation.unreadCount > 0) void markRead(id);
+      if (data.conversation.unreadCount > 0 && !locallyReadIds.has(id)) void markRead(id);
     } catch {
       if (!quiet) setConversationError("No se pudo cargar esta conversación. Vuelve a intentarlo.");
     } finally {
       if (!quiet) setLoadingConversation(false);
     }
-  }, [markRead]);
+  }, [locallyReadIds, markRead]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -179,6 +194,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   const filters = useMemo(() => [["all", "Todas"], ["unread", "No leídas"], ["direct", "Directas"], ["group", "Grupos"]], []);
 
   function selectConversation(id: string) {
+    if (rows.find((conversation) => conversation.id === id)?.unreadCount) void markRead(id);
     setSelectedId(id);
     setDetail(null);
     setConversationError("");
