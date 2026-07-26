@@ -250,7 +250,6 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
         <div className="flex gap-2">
           {canManage && <button type="button" onClick={() => setDirectComposerOpen(true)} disabled={!selectedAccount} className="rounded-full bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50" title={!selectedAccount ? "Selecciona una cuenta para iniciar un mensaje" : undefined}>Nuevo mensaje</button>}
           <Link href="/dashboard/agenda" className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:border-emerald-300 hover:text-emerald-700">Agenda</Link>
-          <Link href="/dashboard/contactos" className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:border-emerald-300 hover:text-emerald-700">Contactos</Link>
         </div>
       </div>
 
