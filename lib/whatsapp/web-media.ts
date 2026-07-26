@@ -24,9 +24,12 @@ function positiveEnvNumber(name: string, fallback: number, maximum: number) {
   return Number.isSafeInteger(value) && value > 0 && value <= maximum ? value : fallback;
 }
 
-/** whatsapp-web.js can expose a stream in current supported builds. The
- * fallback stays deliberately bounded for compatible builds that only expose
- * Base64. */
+/**
+ * whatsapp-web.js exposes a documented Base64 download and a newer streaming
+ * helper. The latter currently depends on an internal browser collection, so
+ * small, bounded attachments use the documented download first. Streaming is
+ * retained only as a recovery path when that standard method is unavailable.
+ */
 export function webMediaLimit(kind: MediaAttachmentKind) {
   const globalLimit = positiveEnvNumber("WA_WEB_MAX_MEDIA_BYTES", 25 * 1024 * 1024, 40 * 1024 * 1024);
   const kindLimit = kind === MediaAttachmentKind.IMAGE
@@ -102,17 +105,29 @@ async function retryOrFail(accountId: string, attachmentId: string, attemptCount
   }, status === MediaAttachmentStatus.UNAVAILABLE ? "error" : "info");
 }
 
-async function sourceStream(message: WebMediaMessage, limit: number) {
-  if (message.downloadMediaStream) {
-    const streamResult = await message.downloadMediaStream();
-    if (!streamResult?.stream) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
-    if (streamResult.filesize && streamResult.filesize > limit) throw new Error("MEDIA_LIMIT_EXCEEDED");
-    return { stream: streamResult.stream, transferMode: "STREAM" as const };
+export async function sourceStream(message: WebMediaMessage, limit: number) {
+  let base64Failure: unknown;
+  if (message.downloadMedia) {
+    try {
+      const media = await message.downloadMedia();
+      if (!media?.data) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
+      if (decodedBase64Size(media.data) > limit) throw new Error("MEDIA_LIMIT_EXCEEDED");
+      return { stream: Readable.from(Buffer.from(media.data, "base64")), transferMode: "BASE64" as const, base64Failure: null };
+    } catch (error) {
+      // A declared size above the limit is final. Other errors can still be
+      // recoverable through the streaming helper.
+      if (error instanceof Error && error.message === "MEDIA_LIMIT_EXCEEDED") throw error;
+      base64Failure = error;
+    }
   }
-  if (!message.downloadMedia) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
-  const media = await message.downloadMedia();
-  if (!media?.data || decodedBase64Size(media.data) > limit) throw new Error("MEDIA_LIMIT_EXCEEDED");
-  return { stream: Readable.from(Buffer.from(media.data, "base64")), transferMode: "BASE64_FALLBACK" as const };
+  if (!message.downloadMediaStream) {
+    if (base64Failure) throw base64Failure;
+    throw new Error("MEDIA_SOURCE_UNAVAILABLE");
+  }
+  const streamResult = await message.downloadMediaStream();
+  if (!streamResult?.stream) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
+  if (streamResult.filesize && streamResult.filesize > limit) throw new Error("MEDIA_LIMIT_EXCEEDED");
+  return { stream: streamResult.stream, transferMode: "STREAM_FALLBACK" as const, base64Failure };
 }
 
 export async function processMediaAttachment(accountId: string, attachmentId: string, client: WebMediaClient, initialMessage?: WebMediaMessage) {
@@ -137,6 +152,14 @@ export async function processMediaAttachment(accountId: string, attachmentId: st
     if (!source) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
     operationalLog("media.download_started", { account: safeLogRef(accountId), attachment: ref, kind: attachment.kind });
     const downloaded = await sourceStream(source, limit);
+    if (downloaded.base64Failure) {
+      operationalLog("media.base64_fallback", {
+        account: safeLogRef(accountId),
+        attachment: ref,
+        kind: attachment.kind,
+        ...safeErrorInfo(downloaded.base64Failure),
+      });
+    }
     const meter = new MediaLimitAndHashTransform(limit);
     const uploadStream = downloaded.stream.pipe(meter);
     operationalLog("media.upload_started", { account: safeLogRef(accountId), attachment: ref, kind: attachment.kind, transferMode: downloaded.transferMode });

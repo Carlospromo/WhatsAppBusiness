@@ -116,7 +116,7 @@ Los deploy logs registran las fases seguras de cada entrada: `inbound.event_rece
 
 Se aceptan únicamente imágenes, audio y vídeo de tamaño reducido. El worker prefiere la descarga por flujo de `whatsapp-web.js` y conserva un respaldo Base64 limitado para versiones compatibles que no expongan ese método. Antes de marcar un adjunto como disponible, comprueba que el objeto se haya escrito en R2. Los estados, documentos, stickers, ubicaciones, llamadas, mensajes efímeros y “ver una vez” se descartan. Base64, claves, URL de WhatsApp, QR y perfiles nunca se almacenan en PostgreSQL.
 
-Los deploy logs muestran las fases seguras `media.transfer_claimed`, `media.download_started`, `media.upload_started`, `media.upload_completed`, `media.retry_scheduled` y `media.transfer_unavailable`. Incluyen solo referencias hash, tipo de archivo, tamaño y categoría de error; no contienen nombres, teléfonos, identificadores de chat, claves, URLs ni contenido.
+Los deploy logs muestran las fases seguras `media.transfer_claimed`, `media.download_started`, `media.base64_fallback`, `media.upload_started`, `media.upload_completed`, `media.retry_scheduled` y `media.transfer_unavailable`. Incluyen solo referencias hash, tipo de archivo, tamaño y categoría de error; no contienen nombres, teléfonos, identificadores de chat, claves, URLs ni contenido. `media.base64_fallback` indica que el método estándar Base64 falló y se usó el flujo de recuperación.
 
 R2 debe permanecer privado: no actives `r2.dev`, dominio público ni credenciales de lectura en el frontend. La ruta autenticada de medios genera acceso breve y no almacena URLs firmadas.
 
