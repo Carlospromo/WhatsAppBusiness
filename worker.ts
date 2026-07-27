@@ -38,6 +38,7 @@ const inboundReconcileLimit = Math.max(1, Math.min(100, Number(process.env.WA_WE
 // reliable. This is a health check, not message polling.
 const connectionHealthCheckMs = Math.max(15_000, Number(process.env.WA_WEB_HEALTHCHECK_SECONDS ?? 60) * 1_000);
 const clients = new Map<string, WhatsAppWebClient>();
+const initialMediaDownloadDelayMs = 1_500;
 const readyAccounts = new Set<string>();
 const authenticatedAccounts = new Set<string>();
 const connecting = new Set<string>();
@@ -450,6 +451,17 @@ function inboundIdentityKind(conversationJid: string, conversationType: "DIRECT"
   return conversationJid.endsWith("@c.us") ? "DIRECT_PHONE" : conversationJid.endsWith("@lid") ? "DIRECT_LID" : "DIRECT_UNKNOWN";
 }
 
+function scheduleInitialMediaDownload(accountId: string, client: WhatsAppWebClient, attachmentId: string, raw: Message) {
+  // The browser can emit the message event a moment before its encrypted media
+  // blob is available. Persist first, then give WhatsApp Web a short settling
+  // period without holding the per-account inbound event queue.
+  const timer = setTimeout(() => {
+    if (stopping || clients.get(accountId) !== client || !readyAccounts.has(accountId)) return;
+    void enqueueAccountWork(accountId, () => processMediaAttachment(accountId, attachmentId, client, raw));
+  }, initialMediaDownloadDelayMs);
+  timer.unref();
+}
+
 async function persistInboundMessageEvent(accountId: string, client: WhatsAppWebClient, raw: Message, source: "message" | "message_create" | "reconcile") {
   const eventExternalId = raw.id?._serialized ?? raw.id?.id ?? "unknown";
   const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
@@ -486,7 +498,7 @@ async function persistInboundMessageEvent(accountId: string, client: WhatsAppWeb
   // Both public events can be emitted for the same inbound message. Only the
   // creator owns its media transfer and contact refresh; PostgreSQL enforces
   // the message-level deduplication for all subsequent events.
-  if (persisted.created && persisted.mediaAttachment) await processMediaAttachment(accountId, persisted.mediaAttachment.id, client, raw);
+  if (persisted.created && persisted.mediaAttachment) scheduleInitialMediaDownload(accountId, client, persisted.mediaAttachment.id, raw);
   if (persisted.created && message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, client, message.conversationJid);
   // Resolve a directly received LID asynchronously after durable message
   // persistence. A profile/contact lookup must never delay or discard inbound

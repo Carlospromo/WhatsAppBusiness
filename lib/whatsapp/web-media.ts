@@ -14,10 +14,14 @@ export type WebMediaStream = {
 };
 
 export type WebMediaMessage = {
+  id?: { _serialized?: string; id?: string };
   downloadMediaStream?: () => Promise<WebMediaStream | undefined>;
   downloadMedia?: () => Promise<{ mimetype: string; data: string } | undefined>;
 };
-export type WebMediaClient = { getMessageById: (id: string) => Promise<WebMediaMessage | null> };
+export type WebMediaClient = {
+  getMessageById: (id: string) => Promise<WebMediaMessage | null>;
+  getChatById?: (id: string) => Promise<{ fetchMessages: (options: { limit: number }) => Promise<WebMediaMessage[]> }>;
+};
 
 function positiveEnvNumber(name: string, fallback: number, maximum: number) {
   const value = Number(process.env[name] ?? fallback);
@@ -130,13 +134,63 @@ export async function sourceStream(message: WebMediaMessage, limit: number) {
   return { stream: streamResult.stream, transferMode: "STREAM_FALLBACK" as const, base64Failure };
 }
 
+function messageExternalId(message: WebMediaMessage) {
+  return message.id?._serialized ?? message.id?.id ?? null;
+}
+
+function supportsGetMessageById(externalId: string) {
+  const parts = externalId.split("_");
+  return parts.length === 3 || parts.length === 4;
+}
+
+type MediaSource = { message: WebMediaMessage; source: "EVENT" | "CACHE" | "CHAT" };
+
+async function collectMediaSources(
+  client: WebMediaClient,
+  externalId: string,
+  conversationJid: string,
+  initialMessage?: WebMediaMessage,
+) {
+  const sources: MediaSource[] = [];
+  if (initialMessage) sources.push({ message: initialMessage, source: "EVENT" });
+
+  // LID serialized identifiers are not always accepted by the public
+  // getMessageById implementation. Only call it for the formats it supports.
+  if (supportsGetMessageById(externalId)) {
+    try {
+      const cached = await client.getMessageById(externalId);
+      if (cached && !sources.some((entry) => entry.message === cached)) sources.push({ message: cached, source: "CACHE" });
+    } catch {
+      // The chat fallback below is deliberately independent of this legacy
+      // lookup and is the reliable recovery path for LID chats.
+    }
+  }
+
+  if (client.getChatById) {
+    try {
+      const chat = await client.getChatById(conversationJid);
+      const messages = await chat.fetchMessages({ limit: 40 });
+      const matched = messages.find((message) => messageExternalId(message) === externalId);
+      if (matched && !sources.some((entry) => entry.message === matched)) sources.push({ message: matched, source: "CHAT" });
+    } catch {
+      // The download attempt records a redacted operational event below. A
+      // lookup failure must not prevent a fresh event object from being used.
+    }
+  }
+
+  return sources;
+}
+
 export async function processMediaAttachment(accountId: string, attachmentId: string, client: WebMediaClient, initialMessage?: WebMediaMessage) {
   const claimed = await prisma.mediaAttachment.updateMany({
     where: { id: attachmentId, accountId, status: { in: [MediaAttachmentStatus.PENDING, MediaAttachmentStatus.RETRYING] } },
     data: { status: MediaAttachmentStatus.DOWNLOADING, lastAttemptAt: new Date(), attemptCount: { increment: 1 }, safeError: null },
   });
   if (!claimed.count) return;
-  const attachment = await prisma.mediaAttachment.findFirst({ where: { id: attachmentId, accountId }, include: { message: { select: { externalId: true } } } });
+  const attachment = await prisma.mediaAttachment.findFirst({
+    where: { id: attachmentId, accountId },
+    include: { message: { select: { externalId: true, conversation: { select: { jid: true } } } } },
+  });
   if (!attachment) return;
 
   const ref = safeLogRef(attachment.id);
@@ -148,10 +202,21 @@ export async function processMediaAttachment(accountId: string, attachmentId: st
   }
 
   try {
-    const source = initialMessage ?? await client.getMessageById(attachment.message.externalId);
-    if (!source) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
-    operationalLog("media.download_started", { account: safeLogRef(accountId), attachment: ref, kind: attachment.kind });
-    const downloaded = await sourceStream(source, limit);
+    const sources = await collectMediaSources(client, attachment.message.externalId, attachment.message.conversation.jid, initialMessage);
+    if (!sources.length) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
+    let downloaded: Awaited<ReturnType<typeof sourceStream>> | undefined;
+    let lastError: unknown;
+    for (const candidate of sources) {
+      try {
+        operationalLog("media.download_started", { account: safeLogRef(accountId), attachment: ref, kind: attachment.kind, source: candidate.source });
+        downloaded = await sourceStream(candidate.message, limit);
+        break;
+      } catch (error) {
+        lastError = error;
+        operationalLog("media.source_attempt_failed", { account: safeLogRef(accountId), attachment: ref, kind: attachment.kind, source: candidate.source, ...safeErrorInfo(error) }, "info");
+      }
+    }
+    if (!downloaded) throw lastError ?? new Error("MEDIA_SOURCE_UNAVAILABLE");
     if (downloaded.base64Failure) {
       operationalLog("media.base64_fallback", {
         account: safeLogRef(accountId),
