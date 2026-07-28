@@ -18,6 +18,7 @@ import { TransientPresenceManager } from "./lib/whatsapp/transient-presence";
 import { canDispatchOutbound } from "./lib/whatsapp/outbound-safety";
 import { changedChatWatermarks, seedChatWatermarks } from "./lib/whatsapp/inbound-reconciliation";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
+import { verifyMediaStorageAccess } from "./lib/media-storage";
 
 const { Client, LocalAuth, MessageAck } = whatsappWeb;
 const authRoot = process.env.WA_WEB_AUTH_DIR || "/data/wwebjs-auth";
@@ -192,12 +193,11 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
   // public message listeners. `getChats()` serializes every cached chat and
   // can fail because of one malformed/unsupported chat (often a group); that
   // optional reconciliation API must never prevent realtime reception.
-  // Without `ready`, however, a CONNECTED socket alone does not prove that
-  // those listeners exist, so the compatibility state probe remains strict.
-  if (source === "state_probe" && !(await primeInboundReconciliation(accountId, client))) {
-    operationalLog("connection.inbound_api_unavailable", { account: safeLogRef(accountId), source }, "error");
-    return false;
-  }
+  // The current Web client can expose a CONNECTED state before optional chat
+  // serialization helpers are available. Realtime listeners are registered
+  // before authentication and have already proved usable at this point, so a
+  // failed best-effort chat scan must never turn a persisted LocalAuth session
+  // into ERROR or force a needless QR relink after a deployment.
   readyAccounts.add(accountId);
   clearReadyTimer(accountId);
   clearReadinessProbe(accountId);
@@ -211,7 +211,7 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
   operationalLog("connection.open", { account: safeLogRef(accountId), source });
   // Baseline reconciliation is best-effort after a real ready event. It is a
   // recovery aid only; incoming `message` events are already wired above.
-  if (source === "ready_event") void primeInboundReconciliation(accountId, client);
+  void primeInboundReconciliation(accountId, client);
   schedulePostReadyMaintenance(accountId, client);
   return true;
 }
@@ -258,6 +258,14 @@ function schedulePostReadyMaintenance(accountId: string, client: WhatsAppWebClie
   void (async () => {
     operationalLog("connection.maintenance_started", { account: safeLogRef(accountId) });
     try {
+      try {
+        await verifyMediaStorageAccess();
+        operationalLog("media.storage_access_ok", { account: safeLogRef(accountId), provider: "R2" });
+      } catch (error) {
+        // This diagnostic is deliberately non-fatal: text reception and the
+        // linked session remain usable while an operator corrects R2 access.
+        operationalLog("media.storage_access_failed", { account: safeLogRef(accountId), provider: "R2", ...safeErrorInfo(error) }, "error");
+      }
       await syncKnownContacts(accountId, client);
       await refreshRecentContactProfilePictures(accountId, client);
       await recoverPendingMedia(accountId, client);
@@ -535,6 +543,7 @@ async function connect(accountId: string) {
   let client: WhatsAppWebClient | undefined;
   try {
     await mkdir(authRoot, { recursive: true });
+    operationalLog("connection.session_profile", { account: safeLogRef(accountId), profile: await hasProfile(accountId) ? "PRESENT" : "MISSING" });
     operationalLog("connection.connecting", { account: safeLogRef(accountId) });
     await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTING, qrCode: null, qrExpiresAt: null, lastError: null, bridgeType: WhatsAppBridgeType.WWEBJS });
     client = new Client({

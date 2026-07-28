@@ -40,6 +40,24 @@ export async function mediaObjectExists(objectKey: string) {
   }
 }
 
+/**
+ * Confirms that the configured private bucket accepts an authenticated read
+ * request without creating or listing any object. A missing sentinel object
+ * is the expected successful outcome; credentials and endpoint are never
+ * returned to callers or logs.
+ */
+export async function verifyMediaStorageAccess() {
+  const config = mediaConfig();
+  try {
+    await r2().send(new HeadObjectCommand({ Bucket: config.bucket, Key: "__whatsappbusiness_healthcheck__/missing" }));
+    return true;
+  } catch (error) {
+    const status = (error as { $metadata?: { httpStatusCode?: unknown } })?.$metadata?.httpStatusCode;
+    if (status === 404) return true;
+    throw error;
+  }
+}
+
 export async function signedMediaReadUrl(objectKey: string) {
   const config = mediaConfig();
   return getSignedUrl(r2(), new GetObjectCommand({ Bucket: config.bucket, Key: objectKey, ResponseCacheControl: "private, no-store" }), { expiresIn: 60 });
