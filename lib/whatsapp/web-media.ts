@@ -148,7 +148,7 @@ type MediaSource = { message: WebMediaMessage; source: "EVENT" | "CACHE" | "CHAT
 async function collectMediaSources(
   client: WebMediaClient,
   externalId: string,
-  conversationJid: string,
+  conversationChatIds: string[],
   initialMessage?: WebMediaMessage,
 ) {
   const sources: MediaSource[] = [];
@@ -167,14 +167,19 @@ async function collectMediaSources(
   }
 
   if (client.getChatById) {
-    try {
-      const chat = await client.getChatById(conversationJid);
-      const messages = await chat.fetchMessages({ limit: 40 });
-      const matched = messages.find((message) => messageExternalId(message) === externalId);
-      if (matched && !sources.some((entry) => entry.message === matched)) sources.push({ message: matched, source: "CHAT" });
-    } catch {
-      // The download attempt records a redacted operational event below. A
-      // lookup failure must not prevent a fresh event object from being used.
+    for (const chatId of conversationChatIds) {
+      try {
+        const chat = await client.getChatById(chatId);
+        const messages = await chat.fetchMessages({ limit: 40 });
+        const matched = messages.find((message) => messageExternalId(message) === externalId);
+        if (matched && !sources.some((entry) => entry.message === matched)) {
+          sources.push({ message: matched, source: "CHAT" });
+          break;
+        }
+      } catch {
+        // Try the next verified chat identity. The transfer path records the
+        // final redacted outcome without exposing chat identifiers.
+      }
     }
   }
 
@@ -189,7 +194,23 @@ export async function processMediaAttachment(accountId: string, attachmentId: st
   if (!claimed.count) return;
   const attachment = await prisma.mediaAttachment.findFirst({
     where: { id: attachmentId, accountId },
-    include: { message: { select: { externalId: true, conversation: { select: { jid: true } } } } },
+    include: {
+      message: {
+        select: {
+          externalId: true,
+          conversation: {
+            select: {
+              jid: true,
+              contact: { select: { phone: true } },
+              externalIdentities: {
+                where: { bridgeType: "WWEBJS" },
+                select: { externalChatId: true, normalizedPhone: true },
+              },
+            },
+          },
+        },
+      },
+    },
   });
   if (!attachment) return;
 
@@ -202,7 +223,17 @@ export async function processMediaAttachment(accountId: string, attachmentId: st
   }
 
   try {
-    const sources = await collectMediaSources(client, attachment.message.externalId, attachment.message.conversation.jid, initialMessage);
+    const conversation = attachment.message.conversation;
+    const verifiedPhones = [
+      conversation.contact?.phone,
+      ...conversation.externalIdentities.map((identity) => identity.normalizedPhone),
+    ].filter((phone): phone is string => Boolean(phone && /^\+[1-9]\d{6,14}$/.test(phone)));
+    const chatIds = [...new Set([
+      conversation.jid,
+      ...conversation.externalIdentities.map((identity) => identity.externalChatId),
+      ...verifiedPhones.map((phone) => `${phone.slice(1)}@c.us`),
+    ])];
+    const sources = await collectMediaSources(client, attachment.message.externalId, chatIds, initialMessage);
     if (!sources.length) throw new Error("MEDIA_SOURCE_UNAVAILABLE");
     let downloaded: Awaited<ReturnType<typeof sourceStream>> | undefined;
     let lastError: unknown;
