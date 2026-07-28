@@ -17,6 +17,8 @@ describe("WhatsApp Web worker runtime", () => {
     expect(worker).toContain("inbound.event_listeners_registered");
     expect(worker).toContain("inbound.normalized");
     expect(worker).toContain("inbound.persistence_failed");
+    expect(worker).toContain("persistOutboundMessageEvent");
+    expect(worker).toContain("outbound.device_persisted");
     expect(worker).toContain("function serializedWebId");
     expect(worker).toContain("conversationResolution");
     expect(worker).toContain("failed best-effort chat scan must never turn a persisted LocalAuth session");

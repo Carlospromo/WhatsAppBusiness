@@ -26,6 +26,19 @@ describe("whatsapp-web.js message normalization", () => {
     expect(video?.messageType).toBe("video");
   });
 
+  it("keeps supported media created from the linked mobile app", () => {
+    const image = normalizeWebMessage({
+      id: { _serialized: "outbound-image-1" }, to: "34600000000@c.us", fromMe: true, type: "image", hasMedia: true,
+      rawData: { mimetype: "image/jpeg", size: 321, width: 20, height: 10 },
+    });
+    expect(image).toMatchObject({
+      direction: "OUTBOUND",
+      conversationJid: "34600000000@c.us",
+      messageType: "image",
+      media: { kind: "IMAGE", mimeType: "image/jpeg", declaredSize: 321 },
+    });
+  });
+
   it("normalizes direct and group chat identities without accepting unknown ids", () => {
     expect(normalizeWebMessage({ id: { _serialized: "group-1" }, from: "123@g.us", body: "Hola", type: "chat" })?.conversationType).toBe("GROUP");
     expect(normalizeWebMessage({ id: { _serialized: "unknown-1" }, from: "123@unknown", body: "Hola", type: "chat" })).toBeNull();

@@ -124,7 +124,10 @@ export function normalizeWebMessage(message: WebMessageLike): NormalizedWebMessa
     direction: fromMe ? "OUTBOUND" : "INBOUND",
     body,
     messageType: media?.kind === MediaAttachmentKind.IMAGE ? "image" : media?.kind === MediaAttachmentKind.AUDIO ? "audio" : media?.kind === MediaAttachmentKind.VIDEO ? "video" : "text",
-    media: fromMe ? undefined : media ?? undefined,
+    // A message created from the linked mobile app is still a WhatsApp Web
+    // event. Preserve its supported media descriptor so the worker can store
+    // it in R2; this does not enable media sending from the platform.
+    media: media ?? undefined,
     sentAt: new Date((numberValue(message.timestamp) ?? Math.floor(Date.now() / 1_000)) * 1_000),
     conversationType,
   };
