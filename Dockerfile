@@ -15,6 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 FROM base AS dependencies
 COPY package.json package-lock.json ./
+# `patch-package` runs during npm ci. The patches must therefore exist before
+# postinstall, otherwise the production image silently retains the upstream
+# WhatsApp Web source without its required compatibility fix.
+COPY patches ./patches
 RUN npm ci
 
 FROM base AS builder

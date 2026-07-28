@@ -5,6 +5,7 @@ describe("WhatsApp Web worker runtime", () => {
   it("uses only the compiled browser bridge", () => {
     const packageJson = readFileSync(new URL("../package.json", import.meta.url), "utf8");
     const worker = readFileSync(new URL("../worker.ts", import.meta.url), "utf8");
+    const workerVerifier = readFileSync(new URL("../scripts/verify-worker-esm.mjs", import.meta.url), "utf8");
     const patch = readFileSync(new URL("../patches/whatsapp-web.js+1.34.7.patch", import.meta.url), "utf8");
     expect(packageJson).toContain('"whatsapp-web.js": "https://codeload.github.com/wwebjs/whatsapp-web.js/tar.gz/1780711a1c86dfeca7c5ba6a66f950eac93dde28"');
     expect(Object.keys(JSON.parse(packageJson).dependencies ?? {}).some((name) => name.startsWith("@whiskey"))).toBe(false);
@@ -27,6 +28,8 @@ describe("WhatsApp Web worker runtime", () => {
     expect(patch).toContain("this.id?._serialized ?? this.id?.$1");
     expect(patch).toContain("window.WWebJS.normalizeSerialized");
     expect(patch).toContain("downloadAndMaybeDecrypt");
+    expect(workerVerifier).toContain("whatsapp-web.js compatibility patch is not installed");
+    expect(workerVerifier).toContain("node_modules/whatsapp-web.js/src/structures/Message.js");
     expect(packageJson).toContain('"postinstall": "patch-package"');
     expect(worker).not.toContain(["relay", "Message"].join(""));
   });
