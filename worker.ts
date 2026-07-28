@@ -39,7 +39,14 @@ const inboundReconcileLimit = Math.max(1, Math.min(100, Number(process.env.WA_WE
 // reliable. This is a health check, not message polling.
 const connectionHealthCheckMs = Math.max(15_000, Number(process.env.WA_WEB_HEALTHCHECK_SECONDS ?? 60) * 1_000);
 const clients = new Map<string, WhatsAppWebClient>();
-const initialMediaDownloadDelayMs = 1_500;
+// The `message_create` event can precede the fully hydrated `message` event
+// for media. Retaining the newest event briefly means the downloader sees the
+// complete media descriptor instead of a first, incomplete projection.
+const initialMediaDownloadDelayMs = Math.min(
+  Math.max(3_000, Number(process.env.WA_WEB_MEDIA_INITIAL_DELAY_SECONDS ?? 5) * 1_000),
+  30_000,
+);
+const inboundMediaEventCache = new Map<string, { client: WhatsAppWebClient; message: Message; expiresAt: number }>();
 const readyAccounts = new Set<string>();
 const authenticatedAccounts = new Set<string>();
 const connecting = new Set<string>();
@@ -102,6 +109,20 @@ function clearConnectionHealthCheck(accountId: string) {
 function clearLidPhoneResolutionAttempts(accountId: string) {
   const prefix = `${accountId}:`;
   for (const key of lidPhoneResolutionAttempts) if (key.startsWith(prefix)) lidPhoneResolutionAttempts.delete(key);
+}
+
+function cacheInboundMediaEvent(attachmentId: string, client: WhatsAppWebClient, message: Message) {
+  inboundMediaEventCache.set(attachmentId, { client, message, expiresAt: Date.now() + 120_000 });
+}
+
+function cachedInboundMediaEvent(attachmentId: string, client: WhatsAppWebClient) {
+  const cached = inboundMediaEventCache.get(attachmentId);
+  if (!cached) return undefined;
+  if (cached.client !== client || cached.expiresAt < Date.now()) {
+    inboundMediaEventCache.delete(attachmentId);
+    return undefined;
+  }
+  return cached.message;
 }
 
 function safeConnectionState(state: unknown) {
@@ -459,13 +480,13 @@ function inboundIdentityKind(conversationJid: string, conversationType: "DIRECT"
   return conversationJid.endsWith("@c.us") ? "DIRECT_PHONE" : conversationJid.endsWith("@lid") ? "DIRECT_LID" : "DIRECT_UNKNOWN";
 }
 
-function scheduleInitialMediaDownload(accountId: string, client: WhatsAppWebClient, attachmentId: string, raw: Message) {
+function scheduleInitialMediaDownload(accountId: string, client: WhatsAppWebClient, attachmentId: string) {
   // The browser can emit the message event a moment before its encrypted media
   // blob is available. Persist first, then give WhatsApp Web a short settling
   // period without holding the per-account inbound event queue.
   const timer = setTimeout(() => {
     if (stopping || clients.get(accountId) !== client || !readyAccounts.has(accountId)) return;
-    void enqueueAccountWork(accountId, () => processMediaAttachment(accountId, attachmentId, client, raw));
+    void enqueueAccountWork(accountId, () => processMediaAttachment(accountId, attachmentId, client, cachedInboundMediaEvent(attachmentId, client)));
   }, initialMediaDownloadDelayMs);
   timer.unref();
 }
@@ -506,7 +527,8 @@ async function persistInboundMessageEvent(accountId: string, client: WhatsAppWeb
   // Both public events can be emitted for the same inbound message. Only the
   // creator owns its media transfer and contact refresh; PostgreSQL enforces
   // the message-level deduplication for all subsequent events.
-  if (persisted.created && persisted.mediaAttachment) scheduleInitialMediaDownload(accountId, client, persisted.mediaAttachment.id, raw);
+  if (persisted.mediaAttachment) cacheInboundMediaEvent(persisted.mediaAttachment.id, client, raw);
+  if (persisted.created && persisted.mediaAttachment) scheduleInitialMediaDownload(accountId, client, persisted.mediaAttachment.id);
   if (persisted.created && message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, client, message.conversationJid);
   // Resolve a directly received LID asynchronously after durable message
   // persistence. A profile/contact lookup must never delay or discard inbound
@@ -733,7 +755,7 @@ async function processReadReceipts() {
 }
 
 async function processPendingMedia() {
-  for (const [accountId, client] of clients) if (readyAccounts.has(accountId)) await enqueueAccountWork(accountId, () => recoverPendingMedia(accountId, client));
+  for (const [accountId, client] of clients) if (readyAccounts.has(accountId)) await enqueueAccountWork(accountId, () => recoverPendingMedia(accountId, client, (attachmentId) => cachedInboundMediaEvent(attachmentId, client)));
 }
 
 /**

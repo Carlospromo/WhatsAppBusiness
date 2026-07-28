@@ -1,5 +1,5 @@
 diff --git a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
-index dfa30a5..7b92231 100644
+index dfa30a5..bb1a1fa 100644
 --- a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
 +++ b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
 @@ -919,10 +919,16 @@ exports.LoadUtils = () => {
@@ -22,7 +22,7 @@ index dfa30a5..7b92231 100644
      };
 
      window.WWebJS.getChannels = async () => {
-@@ -1125,41 +1131,42 @@ exports.LoadUtils = () => {
+@@ -1125,41 +1131,47 @@ exports.LoadUtils = () => {
              return null;
          }
 
@@ -44,7 +44,7 @@ index dfa30a5..7b92231 100644
 +        // A message event can arrive before the Web client has hydrated the
 +        // encrypted media blob. Keep the wait bounded: this is a recovery for
 +        // a single received attachment, never a background media scan.
-+        for (let attempt = 0; attempt < 8; attempt++) {
++        for (let attempt = 0; attempt < 20; attempt++) {
 +            try {
 +                await msg.downloadMedia({
 +                    downloadEvenIfExpensive: true,
@@ -52,7 +52,12 @@ index dfa30a5..7b92231 100644
 +                    isUserInitiated: true,
 +                });
 +            } catch {
-+                return null;
++                // The first message projection can arrive while the media
++                // transport is still being attached. Treat an early internal
++                // Web error as a bounded hydration delay, not as a final
++                // missing file. Nothing from the error is exposed to Node.
++                await new Promise((resolve) => setTimeout(resolve, 500));
++                continue;
 +            }
 
 -        const cached = window
@@ -81,7 +86,7 @@ index dfa30a5..7b92231 100644
 -            blob = cached;
 -        } else if (msg.mediaObject?.mediaBlob) {
 -            blob = msg.mediaObject.mediaBlob.forceToBlob();
-+            await new Promise((resolve) => setTimeout(resolve, 350));
++            await new Promise((resolve) => setTimeout(resolve, 500));
          }
 
 -        if (!blob) return null;

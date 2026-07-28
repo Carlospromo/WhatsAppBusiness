@@ -22,7 +22,7 @@ describe("WhatsApp Web worker runtime", () => {
     expect(worker).toContain("media.storage_access_ok");
     expect(worker).toContain("inboundReconciliationDisabled");
     expect(patch).toContain("Promise.allSettled");
-    expect(patch).toContain("for (let attempt = 0; attempt < 8; attempt++)");
+    expect(patch).toContain("for (let attempt = 0; attempt < 20; attempt++)");
     expect(packageJson).toContain('"postinstall": "patch-package"');
     expect(worker).not.toContain(["relay", "Message"].join(""));
   });

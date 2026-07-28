@@ -272,11 +272,15 @@ export async function processMediaAttachment(accountId: string, attachmentId: st
   }
 }
 
-export async function recoverPendingMedia(accountId: string, client: WebMediaClient) {
+export async function recoverPendingMedia(
+  accountId: string,
+  client: WebMediaClient,
+  cachedEvent?: (attachmentId: string) => WebMediaMessage | undefined,
+) {
   await prisma.mediaAttachment.updateMany({
     where: { accountId, status: MediaAttachmentStatus.DOWNLOADING, OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lt: new Date(Date.now() - 60_000) } }] },
     data: { status: MediaAttachmentStatus.RETRYING, safeError: "Preparando archivo…" },
   });
   const attachments = await prisma.mediaAttachment.findMany({ where: { accountId, status: { in: [MediaAttachmentStatus.PENDING, MediaAttachmentStatus.RETRYING] } }, orderBy: { createdAt: "asc" }, take: 3, select: { id: true } });
-  for (const attachment of attachments) await processMediaAttachment(accountId, attachment.id, client);
+  for (const attachment of attachments) await processMediaAttachment(accountId, attachment.id, client, cachedEvent?.(attachment.id));
 }
