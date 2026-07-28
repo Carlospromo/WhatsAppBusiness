@@ -22,6 +22,7 @@ function positiveInteger(name, fallback, minimum, maximum) {
 
 positiveInteger("WA_ACCOUNT_CHECK_SECONDS", 15, 5, 300);
 positiveInteger("WA_WEB_CLIENT_READY_TIMEOUT_SECONDS", 120, 30, 600);
+positiveInteger("WA_WEB_MEDIA_INITIAL_DELAY_SECONDS", 5, 3, 30);
 positiveInteger("WA_WEB_READY_PROBE_DELAY_SECONDS", 25, 5, 90);
 positiveInteger("WA_WEB_HEALTHCHECK_SECONDS", 60, 15, 300);
 positiveInteger("WA_WEB_INBOUND_RECONCILE_SECONDS", 30, 10, 300);

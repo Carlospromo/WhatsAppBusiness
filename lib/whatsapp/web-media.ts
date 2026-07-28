@@ -14,7 +14,7 @@ export type WebMediaStream = {
 };
 
 export type WebMediaMessage = {
-  id?: { _serialized?: string; id?: string };
+  id?: { _serialized?: string; $1?: string; id?: string };
   downloadMediaStream?: () => Promise<WebMediaStream | undefined>;
   downloadMedia?: () => Promise<{ mimetype: string; data: string } | undefined>;
 };
@@ -135,7 +135,7 @@ export async function sourceStream(message: WebMediaMessage, limit: number) {
 }
 
 function messageExternalId(message: WebMediaMessage) {
-  return message.id?._serialized ?? message.id?.id ?? null;
+  return message.id?._serialized ?? message.id?.$1 ?? message.id?.id ?? null;
 }
 
 function supportsGetMessageById(externalId: string) {

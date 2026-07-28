@@ -36,6 +36,11 @@ describe("whatsapp-web.js message normalization", () => {
     expect(result).toMatchObject({ conversationJid: "123456789@lid", conversationType: "DIRECT", direction: "INBOUND", phoneJid: undefined });
   });
 
+  it("uses the current WhatsApp Web $1 serialized key when _serialized is absent", () => {
+    const result = normalizeWebMessage({ id: { $1: "false_123456789@lid_A1B2" }, from: "123456789@lid", type: "image", hasMedia: true, rawData: { mimetype: "image/jpeg" } });
+    expect(result).toMatchObject({ externalId: "false_123456789@lid_A1B2", messageType: "image" });
+  });
+
   it("keeps a visible fallback phone for browser direct conversations", () => {
     expect(phoneFromConversationJid("34600000000@c.us")).toBe("+34600000000");
     expect(phoneFromConversationJid("123456789@lid")).toBeNull();
