@@ -17,9 +17,12 @@ describe("WhatsApp Web worker runtime", () => {
     expect(worker).toContain("inbound.normalized");
     expect(worker).toContain("inbound.persistence_failed");
     expect(worker).toContain("conversationResolution");
-    expect(worker).toContain('source === "state_probe" && !(await primeInboundReconciliation(accountId, client))');
+    expect(worker).toContain("failed best-effort chat scan must never turn a persisted LocalAuth session");
+    expect(worker).toContain("connection.session_profile");
+    expect(worker).toContain("media.storage_access_ok");
     expect(worker).toContain("inboundReconciliationDisabled");
     expect(patch).toContain("Promise.allSettled");
+    expect(patch).toContain("for (let attempt = 0; attempt < 8; attempt++)");
     expect(packageJson).toContain('"postinstall": "patch-package"');
     expect(worker).not.toContain(["relay", "Message"].join(""));
   });

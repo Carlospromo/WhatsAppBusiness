@@ -1,8 +1,9 @@
 diff --git a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
-index dfa30a5..fd69615 100644
+index dfa30a5..7b92231 100644
 --- a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
 +++ b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
-@@ -920,7 +920,13 @@ exports.LoadUtils = () => {
+@@ -919,10 +919,16 @@ exports.LoadUtils = () => {
+
      window.WWebJS.getChats = async () => {
          const chats = window.require('WAWebCollections').Chat.getModelsArray();
 -        const chatPromises = chats.map((chat) =>
@@ -19,3 +20,79 @@ index dfa30a5..fd69615 100644
 +            .filter((result) => result.status === 'fulfilled' && result.value)
 +            .map((result) => result.value);
      };
+
+     window.WWebJS.getChannels = async () => {
+@@ -1125,41 +1131,42 @@ exports.LoadUtils = () => {
+             return null;
+         }
+
+-        // Always call internal downloadMedia - never skip based on
+-        // mediaStage, because cache eviction can leave stage=RESOLVED
+-        // with empty InMemoryMediaBlobCache.
+-        await msg.downloadMedia({
+-            downloadEvenIfExpensive: true,
+-            rmrReason: 1,
+-            isUserInitiated: true,
+-        });
+-
+-        if (
+-            msg.mediaData.mediaStage.includes('ERROR') ||
+-            msg.mediaData.mediaStage === 'FETCHING'
+-        ) {
+-            return null;
+-        }
++        // A message event can arrive before the Web client has hydrated the
++        // encrypted media blob. Keep the wait bounded: this is a recovery for
++        // a single received attachment, never a background media scan.
++        for (let attempt = 0; attempt < 8; attempt++) {
++            try {
++                await msg.downloadMedia({
++                    downloadEvenIfExpensive: true,
++                    rmrReason: 1,
++                    isUserInitiated: true,
++                });
++            } catch {
++                return null;
++            }
+
+-        const cached = window
+-            .require('WAWebMediaInMemoryBlobCache')
+-            .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
++            const stage = msg.mediaData?.mediaStage;
++            if (typeof stage === 'string' && stage.includes('ERROR')) return null;
++            if (stage !== 'FETCHING') {
++                const cached = window
++                    .require('WAWebMediaInMemoryBlobCache')
++                    .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
++
++                const blob = cached || msg.mediaObject?.mediaBlob?.forceToBlob();
++                if (blob) {
++                    return {
++                        blob,
++                        mimetype: msg.mimetype,
++                        filename: msg.filename,
++                        filesize: msg.size,
++                    };
++                }
++            }
+
+-        let blob;
+-        if (cached) {
+-            blob = cached;
+-        } else if (msg.mediaObject?.mediaBlob) {
+-            blob = msg.mediaObject.mediaBlob.forceToBlob();
++            await new Promise((resolve) => setTimeout(resolve, 350));
+         }
+
+-        if (!blob) return null;
+-
+-        return {
+-            blob,
+-            mimetype: msg.mimetype,
+-            filename: msg.filename,
+-            filesize: msg.size,
+-        };
++        return null;
+     };
+
+     window.WWebJS.arrayBufferToBase64 = (arrayBuffer) => {
