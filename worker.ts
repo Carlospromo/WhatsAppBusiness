@@ -46,7 +46,7 @@ const initialMediaDownloadDelayMs = Math.min(
   Math.max(3_000, Number(process.env.WA_WEB_MEDIA_INITIAL_DELAY_SECONDS ?? 5) * 1_000),
   30_000,
 );
-const inboundMediaEventCache = new Map<string, { client: WhatsAppWebClient; message: Message; expiresAt: number }>();
+const mediaEventCache = new Map<string, { client: WhatsAppWebClient; message: Message; expiresAt: number }>();
 const readyAccounts = new Set<string>();
 const authenticatedAccounts = new Set<string>();
 const connecting = new Set<string>();
@@ -127,15 +127,15 @@ function clearLidPhoneResolutionAttempts(accountId: string) {
   for (const key of lidPhoneResolutionAttempts) if (key.startsWith(prefix)) lidPhoneResolutionAttempts.delete(key);
 }
 
-function cacheInboundMediaEvent(attachmentId: string, client: WhatsAppWebClient, message: Message) {
-  inboundMediaEventCache.set(attachmentId, { client, message, expiresAt: Date.now() + 120_000 });
+function cacheMediaEvent(attachmentId: string, client: WhatsAppWebClient, message: Message) {
+  mediaEventCache.set(attachmentId, { client, message, expiresAt: Date.now() + 120_000 });
 }
 
-function cachedInboundMediaEvent(attachmentId: string, client: WhatsAppWebClient) {
-  const cached = inboundMediaEventCache.get(attachmentId);
+function cachedMediaEvent(attachmentId: string, client: WhatsAppWebClient) {
+  const cached = mediaEventCache.get(attachmentId);
   if (!cached) return undefined;
   if (cached.client !== client || cached.expiresAt < Date.now()) {
-    inboundMediaEventCache.delete(attachmentId);
+    mediaEventCache.delete(attachmentId);
     return undefined;
   }
   return cached.message;
@@ -496,13 +496,13 @@ function inboundIdentityKind(conversationJid: string, conversationType: "DIRECT"
   return conversationJid.endsWith("@c.us") ? "DIRECT_PHONE" : conversationJid.endsWith("@lid") ? "DIRECT_LID" : "DIRECT_UNKNOWN";
 }
 
-function scheduleInitialMediaDownload(accountId: string, client: WhatsAppWebClient, attachmentId: string) {
-  // The browser can emit the message event a moment before its encrypted media
-  // blob is available. Persist first, then give WhatsApp Web a short settling
-  // period without holding the per-account inbound event queue.
+function scheduleMediaDownload(accountId: string, client: WhatsAppWebClient, attachmentId: string) {
+  // WhatsApp Web can emit either an inbound event or a locally-created mobile
+  // message before its encrypted media blob is available. Persist first, then
+  // give the browser a short settling period without blocking the account queue.
   const timer = setTimeout(() => {
     if (stopping || clients.get(accountId) !== client || !readyAccounts.has(accountId)) return;
-    void enqueueAccountWork(accountId, () => processMediaAttachment(accountId, attachmentId, client, cachedInboundMediaEvent(attachmentId, client)));
+    void enqueueAccountWork(accountId, () => processMediaAttachment(accountId, attachmentId, client, cachedMediaEvent(attachmentId, client)));
   }, initialMediaDownloadDelayMs);
   timer.unref();
 }
@@ -543,8 +543,8 @@ async function persistInboundMessageEvent(accountId: string, client: WhatsAppWeb
   // Both public events can be emitted for the same inbound message. Only the
   // creator owns its media transfer and contact refresh; PostgreSQL enforces
   // the message-level deduplication for all subsequent events.
-  if (persisted.mediaAttachment) cacheInboundMediaEvent(persisted.mediaAttachment.id, client, raw);
-  if (persisted.created && persisted.mediaAttachment) scheduleInitialMediaDownload(accountId, client, persisted.mediaAttachment.id);
+  if (persisted.mediaAttachment) cacheMediaEvent(persisted.mediaAttachment.id, client, raw);
+  if (persisted.created && persisted.mediaAttachment) scheduleMediaDownload(accountId, client, persisted.mediaAttachment.id);
   if (persisted.created && message.conversationType === "DIRECT") await refreshContactProfilePicture(accountId, client, message.conversationJid);
   // Resolve a directly received LID asynchronously after durable message
   // persistence. A profile/contact lookup must never delay or discard inbound
@@ -558,6 +558,55 @@ async function persistInboundMessageEvent(accountId: string, client: WhatsAppWeb
     created: persisted.created,
     source,
     identityKind,
+    conversationResolution: persisted.conversationResolution,
+  });
+}
+
+/**
+ * `message_create` includes messages sent from the linked mobile app. Text
+ * messages were already persisted, but supported media was intentionally
+ * excluded by the original inbound-only scope. Store those new media files by
+ * the same bounded, private R2 path without enabling media sending from this
+ * platform.
+ */
+async function persistOutboundMessageEvent(accountId: string, client: WhatsAppWebClient, raw: Message) {
+  const eventExternalId = serializedWebId(raw.id) ?? "unknown";
+  const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
+  operationalLog("outbound.device_event_received", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), messageType: eventType, source: "message_create" });
+  const message = normalizeWebMessage(raw as unknown as WebMessageLike);
+  if (!message || message.direction !== "OUTBOUND") {
+    operationalLog("outbound.device_event_ignored", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), reason: "unsupported_or_inbound", source: "message_create" }, "debug");
+    return;
+  }
+  const identityKind = inboundIdentityKind(message.conversationJid, message.conversationType);
+  operationalLog("outbound.device_normalized", {
+    account: safeLogRef(accountId),
+    message: safeLogRef(message.externalId),
+    identityKind,
+    messageType: message.messageType,
+    hasBody: Boolean(message.body),
+    hasMedia: Boolean(message.media),
+  });
+  let persisted: Awaited<ReturnType<typeof persistMessage>>;
+  try {
+    persisted = await persistMessage(accountId, message);
+  } catch (error) {
+    operationalLog("outbound.device_persistence_failed", {
+      account: safeLogRef(accountId),
+      message: safeLogRef(message.externalId),
+      identityKind,
+      ...safeErrorInfo(error),
+    }, "error");
+    throw error;
+  }
+  if (persisted.mediaAttachment) cacheMediaEvent(persisted.mediaAttachment.id, client, raw);
+  if (persisted.created && persisted.mediaAttachment) scheduleMediaDownload(accountId, client, persisted.mediaAttachment.id);
+  operationalLog("outbound.device_persisted", {
+    account: safeLogRef(accountId),
+    message: safeLogRef(message.externalId),
+    created: persisted.created,
+    identityKind,
+    hasMedia: Boolean(persisted.mediaAttachment),
     conversationResolution: persisted.conversationResolution,
   });
 }
@@ -662,7 +711,7 @@ async function connect(accountId: string) {
       const message = normalizeWebMessage(raw as unknown as WebMessageLike);
       if (message?.direction === "INBOUND") return persistInboundMessageEvent(accountId, activeClient, raw, "message_create");
       if (!message || message.direction !== "OUTBOUND") return;
-      await persistMessage(accountId, message);
+      await persistOutboundMessageEvent(accountId, activeClient, raw);
     }));
     activeClient.on("message_ack", (message: Message, ack: number) => void enqueueAccountWork(accountId, async () => {
       if (!message.fromMe) return;
@@ -771,7 +820,7 @@ async function processReadReceipts() {
 }
 
 async function processPendingMedia() {
-  for (const [accountId, client] of clients) if (readyAccounts.has(accountId)) await enqueueAccountWork(accountId, () => recoverPendingMedia(accountId, client, (attachmentId) => cachedInboundMediaEvent(attachmentId, client)));
+  for (const [accountId, client] of clients) if (readyAccounts.has(accountId)) await enqueueAccountWork(accountId, () => recoverPendingMedia(accountId, client, (attachmentId) => cachedMediaEvent(attachmentId, client)));
 }
 
 /**
