@@ -23,7 +23,7 @@ export type NormalizedWebMessage = {
 };
 
 export type WebMessageLike = {
-  id?: { _serialized?: string; id?: string };
+  id?: { _serialized?: string; $1?: string; id?: string };
   from?: string;
   to?: string;
   fromMe?: boolean;
@@ -104,7 +104,7 @@ export function maskPhone(chatId: string | null | undefined) {
 }
 
 export function normalizeWebMessage(message: WebMessageLike): NormalizedWebMessage | null {
-  const externalId = message.id?._serialized ?? message.id?.id;
+  const externalId = message.id?._serialized ?? message.id?.$1 ?? message.id?.id;
   const fromMe = Boolean(message.fromMe);
   const conversationJid = fromMe ? message.to : message.from;
   if (!externalId || !conversationJid || temporaryOrUnsupported(message)) return null;

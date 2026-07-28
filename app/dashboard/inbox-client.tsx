@@ -64,6 +64,13 @@ function formatDay(value: string) {
   return new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value));
 }
 
+function emptyMessageLabel(messageType: string) {
+  if (messageType === "image") return "📷 Imagen";
+  if (messageType === "audio") return "🎙️ Audio";
+  if (messageType === "video") return "🎥 Vídeo";
+  return "Mensaje sin texto";
+}
+
 function mergeById<T extends { id: string }>(older: T[], newer: T[]) {
   const seen = new Set<string>();
   return [...older, ...newer].filter((item) => {
@@ -310,7 +317,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
                     <div className={`flex ${outbound ? "justify-end" : "justify-start"}`}>
                       <article className={`max-w-[88%] rounded-2xl px-3 py-2.5 text-sm shadow-sm sm:max-w-[74%] ${outbound ? "rounded-br-md bg-emerald-600 text-white" : "rounded-bl-md bg-white text-slate-800"}`}>
                         {message.mediaAttachments?.map((attachment) => <MediaContent key={attachment.id} attachment={attachment} outbound={outbound} />)}
-                        {message.body ? <p className={`${message.mediaAttachments?.length ? "mt-2" : ""} whitespace-pre-wrap break-words leading-relaxed`}>{message.body}</p> : !message.mediaAttachments?.length && <p className="whitespace-pre-wrap break-words leading-relaxed">Mensaje sin texto</p>}
+                        {message.body ? <p className={`${message.mediaAttachments?.length ? "mt-2" : ""} whitespace-pre-wrap break-words leading-relaxed`}>{message.body}</p> : !message.mediaAttachments?.length && <p className="whitespace-pre-wrap break-words leading-relaxed">{emptyMessageLabel(message.messageType)}</p>}
                         <div className={`mt-1 flex items-center justify-end gap-1.5 text-[10px] ${outbound ? "text-emerald-100" : "text-slate-400"}`}>{outbound && message.outboundStatus === "SENDING" && <span>Enviando</span>}{outbound && message.outboundStatus === "CANCELED" && <span className="font-medium text-amber-100">Cancelado</span>}{outbound && message.outboundStatus === "FAILED" && <span className="font-medium text-rose-100">Error</span>}{outbound && message.outboundStatus === "SENT" && <span>Enviado</span>}<time>{formatTime(message.sentAt)}</time></div>
                       </article>
                     </div>

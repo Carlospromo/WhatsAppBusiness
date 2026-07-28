@@ -79,6 +79,22 @@ const presence = new TransientPresenceManager(3_000, (accountId, error) => {
 function clientId(accountId: string) { return accountId.replace(/[^a-zA-Z0-9_-]/g, "_"); }
 function profilePath(accountId: string) { return join(authRoot, `session-${clientId(accountId)}`); }
 function hasProfile(accountId: string) { return access(profilePath(accountId)).then(() => true).catch(() => false); }
+
+/**
+ * WhatsApp Web is gradually moving serialized identifiers from `_serialized`
+ * to `$1`. The patched bridge normalizes both, but this boundary helper keeps
+ * every worker path compatible when a live browser event arrives before that
+ * normalization is applied.
+ */
+function serializedWebId(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const id = value as { _serialized?: unknown; $1?: unknown; id?: unknown };
+  return typeof id._serialized === "string" ? id._serialized
+    : typeof id.$1 === "string" ? id.$1
+      : typeof id.id === "string" ? id.id
+        : null;
+}
+
 function chromiumArgs() {
   const args = ["--disable-dev-shm-usage", "--disable-gpu"];
   // Railway's container runtime does not permit Chromium's namespace sandbox.
@@ -223,7 +239,7 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
   clearReadyTimer(accountId);
   clearReadinessProbe(accountId);
   resetReconnectDelay(accountId);
-  const accountIdFromClient = client.info?.wid?._serialized ?? null;
+  const accountIdFromClient = serializedWebId(client.info?.wid);
   await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTED, qrCode: null, qrExpiresAt: null, accountJid: accountIdFromClient, maskedPhone: maskPhone(accountIdFromClient), lastError: null, bridgeType: WhatsAppBridgeType.WWEBJS });
   await auditConnection(accountId, source === "ready_event" ? "WHATSAPP_CONNECTED" : "WHATSAPP_CONNECTED_STATE_VERIFIED");
   await presence.markIdle(accountId, client);
@@ -239,7 +255,7 @@ async function completeClientReady(accountId: string, client: WhatsAppWebClient,
 
 function chatSnapshots(chats: Awaited<ReturnType<WhatsAppWebClient["getChats"]>>) {
   return chats.flatMap((chat) => {
-    const id = chat.id?._serialized;
+    const id = serializedWebId(chat.id);
     const timestamp = typeof chat.timestamp === "number" && Number.isSafeInteger(chat.timestamp) ? chat.timestamp : null;
     return id && timestamp !== null ? [{ id, timestamp }] : [];
   });
@@ -443,7 +459,7 @@ async function closeClient(accountId: string, client?: WhatsAppWebClient) {
 async function contactFromMessage(accountId: string, message: Message) {
   try {
     const contact = await message.getContact();
-    const chatId = contact.id?._serialized;
+    const chatId = serializedWebId(contact.id);
     if (chatId) await upsertContact(accountId, { chatId, displayName: contact.name ?? contact.shortName ?? null, pushName: contact.pushname ?? null });
   } catch {
     // Contact metadata is optional and must never block a message.
@@ -492,7 +508,7 @@ function scheduleInitialMediaDownload(accountId: string, client: WhatsAppWebClie
 }
 
 async function persistInboundMessageEvent(accountId: string, client: WhatsAppWebClient, raw: Message, source: "message" | "message_create" | "reconcile") {
-  const eventExternalId = raw.id?._serialized ?? raw.id?.id ?? "unknown";
+  const eventExternalId = serializedWebId(raw.id) ?? "unknown";
   const eventType = typeof raw.type === "string" && /^[a-z_]{1,64}$/i.test(raw.type) ? raw.type : "unknown";
   operationalLog("inbound.event_received", { account: safeLogRef(accountId), message: safeLogRef(eventExternalId), messageType: eventType, source });
   const message = normalizeWebMessage(raw as unknown as WebMessageLike);
@@ -550,7 +566,7 @@ async function syncKnownContacts(accountId: string, client: WhatsAppWebClient) {
   try {
     const contacts = await client.getContacts();
     for (const contact of contacts.slice(0, 5_000)) {
-      const chatId = contact.id?._serialized;
+      const chatId = serializedWebId(contact.id);
       if (chatId) await upsertContact(accountId, { chatId, displayName: contact.name ?? contact.shortName ?? null, pushName: contact.pushname ?? null });
     }
     operationalLog("contacts.sync_completed", { account: safeLogRef(accountId), count: contacts.length });
@@ -638,7 +654,7 @@ async function connect(accountId: string) {
       scheduleReconnect(accountId);
     }));
     activeClient.on("contact_changed", (contact: Contact) => void enqueueAccountWork(accountId, async () => {
-      const chatId = contact.id?._serialized;
+      const chatId = serializedWebId(contact.id);
       if (chatId) await upsertContact(accountId, { chatId, displayName: contact.name ?? contact.shortName ?? null, pushName: contact.pushname ?? null });
     }));
     activeClient.on("message", (raw: Message) => void enqueueAccountWork(accountId, () => persistInboundMessageEvent(accountId, activeClient, raw, "message")));
@@ -650,7 +666,7 @@ async function connect(accountId: string) {
     }));
     activeClient.on("message_ack", (message: Message, ack: number) => void enqueueAccountWork(accountId, async () => {
       if (!message.fromMe) return;
-      const externalId = message.id?._serialized;
+      const externalId = serializedWebId(message.id);
       if (!externalId) return;
       if (ack === MessageAck.ACK_ERROR) {
         operationalLog("outbound.rejected", { account: safeLogRef(accountId), message: safeLogRef(externalId), phase: "ack_received", status: "FAILED" }, "error");
@@ -722,7 +738,7 @@ async function processNextOutbound(accountId: string, client: WhatsAppWebClient)
   try {
     operationalLog("outbound.relay_started", { ...context, phase: "relay_started", status: "SENDING" });
     const sent = await presence.duringActivity(accountId, client, () => client.sendMessage(destination.jid!, request.body));
-    const externalId = sent.id?._serialized;
+    const externalId = serializedWebId(sent.id);
     if (!externalId || !(await attachOutboundExternalId(request.id, externalId))) throw new Error("outbound correlation unavailable");
     operationalLog("outbound.correlation_persisted", { ...context, message: safeLogRef(externalId), phase: "relay_started", status: "SENDING" });
     await recordOutboundRelayAccepted(request, externalId, destination.jid);
@@ -766,7 +782,10 @@ async function processPendingMedia() {
 async function reconcileInboundMessages(accountId: string, client: WhatsAppWebClient) {
   try {
     const chats = await client.getChats();
-    const chatsById = new Map(chats.flatMap((chat) => chat.id?._serialized ? [[chat.id._serialized, chat] as const] : []));
+    const chatsById = new Map(chats.flatMap((chat) => {
+      const id = serializedWebId(chat.id);
+      return id ? [[id, chat] as const] : [];
+    }));
     const snapshots = chatSnapshots(chats);
     const watermarks = inboundWatermarks.get(accountId);
     if (!watermarks) {

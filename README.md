@@ -94,6 +94,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `PUPPETEER_EXECUTABLE_PATH` | En la imagen: `/usr/bin/chromium`. |
 | `PUPPETEER_NO_SANDBOX` | `true` dentro de Railway porque su runtime bloquea los *namespaces* del sandbox de Chromium; en local debe permanecer `false` salvo necesidad equivalente. |
 | `WA_WEB_CLIENT_READY_TIMEOUT_SECONDS` | Tiempo máximo de inicio del cliente (30–600). |
+| `WA_WEB_MEDIA_INITIAL_DELAY_SECONDS` | Espera inicial antes de descargar un medio recién recibido (3–30; predeterminado 5). Permite que WhatsApp Web hidrate el objeto antes de solicitarlo. |
 | `WA_WEB_READY_PROBE_DELAY_SECONDS` | Espera antes del sondeo de compatibilidad tras `authenticated` (5–90; predeterminado 25). No es un intervalo de sincronización. |
 | `WA_WEB_HEALTHCHECK_SECONDS` | Comprobación de salud del navegador cada 15–300 s (predeterminado 60). Solo consulta el estado de sesión; no lee chats ni sondea mensajes. Tras dos fallos recrea el navegador conservando el perfil. |
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
@@ -108,13 +109,13 @@ No reutilices `AUTH_SECRET` como clave de R2. No guardes variables reales en Git
 
 Las variables históricas `WA_AUTH_DIR`, `WA_CONNECTION_MODE`, `WA_SYNC_INTERVAL_SECONDS`, `WA_SYNC_WINDOW_SECONDS` y `WA_SYNC_CONNECT_TIMEOUT_SECONDS` ya no se usan y deben eliminarse de Railway para evitar confusión. `MEDIA_ENCRYPTION_KEY` tampoco es necesaria con este bridge: no se conservan envoltorios de descarga del bridge anterior.
 
-La dependencia de WhatsApp Web incluye un parche reproducible en `patches/whatsapp-web.js+1.34.7.patch`. El cliente web puede no serializar algún grupo temporalmente; el parche evita que ese grupo impida la reconciliación acotada del resto de chats. Se aplica automáticamente mediante `postinstall` y no cambia el protocolo ni la sesión.
+La dependencia de WhatsApp Web incluye un parche reproducible en `patches/whatsapp-web.js+1.34.7.patch`. Mientras la versión fijada recibe la transición de identificadores serializados `_serialized` a `$1` de WhatsApp Web, el parche normaliza ambos formatos y mejora la recuperación de medios desde el objeto vivo del navegador. Se aplica automáticamente mediante `postinstall`, no cambia el protocolo ni la sesión y no conserva claves, URL ni medios fuera de los mecanismos ya previstos.
 
 Los deploy logs registran las fases seguras de cada entrada: `inbound.event_received`, `inbound.normalized`, `inbound.persisted` o `inbound.persistence_failed`. Solo contienen hashes cortos, tipo de identidad (`DIRECT_PHONE`, `DIRECT_LID` o `GROUP`), tipo de mensaje y resultado de conciliación; nunca teléfonos, identificadores de chat ni contenido.
 
 ## Medios
 
-Se aceptan únicamente imágenes, audio y vídeo de tamaño reducido. El worker prefiere la descarga por flujo de `whatsapp-web.js` y conserva un respaldo Base64 limitado para versiones compatibles que no expongan ese método. Antes de marcar un adjunto como disponible, comprueba que el objeto se haya escrito en R2. Los estados, documentos, stickers, ubicaciones, llamadas, mensajes efímeros y “ver una vez” se descartan. Base64, claves, URL de WhatsApp, QR y perfiles nunca se almacenan en PostgreSQL.
+Se aceptan únicamente imágenes, audio y vídeo de tamaño reducido. El worker usa la API pública de descarga de `whatsapp-web.js` y, solo si está disponible, un respaldo de flujo limitado. Antes de marcar un adjunto como disponible, comprueba que el objeto se haya escrito en R2. Los estados, documentos, stickers, ubicaciones, llamadas, mensajes efímeros y “ver una vez” se descartan. Base64, claves, URL de WhatsApp, QR y perfiles nunca se almacenan en PostgreSQL.
 
 Los deploy logs muestran las fases seguras `media.transfer_claimed`, `media.download_started`, `media.base64_fallback`, `media.upload_started`, `media.upload_completed`, `media.retry_scheduled` y `media.transfer_unavailable`. Incluyen solo referencias hash, tipo de archivo, tamaño y categoría de error; no contienen nombres, teléfonos, identificadores de chat, claves, URLs ni contenido. `media.base64_fallback` indica que el método estándar Base64 falló y se usó el flujo de recuperación.
 

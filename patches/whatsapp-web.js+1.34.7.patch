@@ -1,8 +1,156 @@
+diff --git a/node_modules/whatsapp-web.js/src/Client.js b/node_modules/whatsapp-web.js/src/Client.js
+index a122a8f..cdb6e33 100644
+--- a/node_modules/whatsapp-web.js/src/Client.js
++++ b/node_modules/whatsapp-web.js/src/Client.js
+@@ -3374,8 +3374,8 @@ class Client extends EventEmitter {
+                         await window.WWebJS.enforceLidAndPnRetrieval(userId);
+
+                     return {
+-                        lid: lid?._serialized,
+-                        pn: phone?._serialized,
++                        lid: lid?._serialized ?? lid?.$1,
++                        pn: phone?._serialized ?? phone?.$1,
+                     };
+                 }),
+             );
+diff --git a/node_modules/whatsapp-web.js/src/structures/Message.js b/node_modules/whatsapp-web.js/src/structures/Message.js
+index 51e9062..c1cf694 100644
+--- a/node_modules/whatsapp-web.js/src/structures/Message.js
++++ b/node_modules/whatsapp-web.js/src/structures/Message.js
+@@ -75,7 +75,7 @@ class Message extends Base {
+          */
+         this.from =
+             typeof data.from === 'object' && data.from !== null
+-                ? data.from._serialized
++                ? data.from._serialized ?? data.from.$1
+                 : data.from;
+
+         /**
+@@ -87,7 +87,7 @@ class Message extends Base {
+          */
+         this.to =
+             typeof data.to === 'object' && data.to !== null
+-                ? data.to._serialized
++                ? data.to._serialized ?? data.to.$1
+                 : data.to;
+
+         /**
+@@ -96,7 +96,7 @@ class Message extends Base {
+          */
+         this.author =
+             typeof data.author === 'object' && data.author !== null
+-                ? data.author._serialized
++                ? data.author._serialized ?? data.author.$1
+                 : data.author;
+
+         /**
+@@ -514,6 +514,11 @@ class Message extends Base {
+     async downloadMedia() {
+         if (!this.hasMedia) return undefined;
+
++        // WhatsApp Web 2.3000.1043xxx moved the serialized message key from
++        // `_serialized` to `$1`. Support both without exposing either value.
++        const msgId = this.id?._serialized ?? this.id?.$1;
++        if (!msgId) return undefined;
++
+         const result = await this.client.pupPage.evaluate(async (msgId) => {
+             const resolved = await window.WWebJS.resolveMediaBlob(msgId);
+             if (!resolved) return null;
+@@ -527,7 +532,7 @@ class Message extends Base {
+                 filename: resolved.filename,
+                 filesize: resolved.filesize,
+             };
+-        }, this.id._serialized);
++        }, msgId);
+
+         if (!result) return undefined;
+         return new MessageMedia(
+@@ -547,12 +552,15 @@ class Message extends Base {
+     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
+         if (!this.hasMedia) return undefined;
+
++        const msgId = this.id?._serialized ?? this.id?.$1;
++        if (!msgId) return undefined;
++
+         const blobHandle = await this.client.pupPage.evaluateHandle(
+             async (msgId) => {
+                 const result = await window.WWebJS.resolveMediaBlob(msgId);
+                 return result?.blob ?? null;
+             },
+-            this.id._serialized,
++            msgId,
+         );
+
+         let metadata;
+@@ -566,7 +574,7 @@ class Message extends Base {
+                     filename: msg?.filename,
+                     filesize: msg?.size,
+                 };
+-            }, this.id._serialized);
++            }, msgId);
+         } catch (err) {
+             await blobHandle.dispose().catch(() => {});
+             throw err;
 diff --git a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
-index dfa30a5..bb1a1fa 100644
+index dfa30a5..c211a18 100644
 --- a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
 +++ b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
-@@ -919,10 +919,16 @@ exports.LoadUtils = () => {
+@@ -3,6 +3,38 @@
+ exports.LoadUtils = () => {
+     window.WWebJS = {};
+
++    // WhatsApp Web is migrating identity serialization from `_serialized` to
++    // `$1`. Keep this bridge compatible with both representations and mirror
++    // the value only inside the object sent back to the Node wrapper.
++    window.WWebJS.widSerialized = (wid) => {
++        if (!wid || typeof wid === 'string') return wid;
++        return (
++            wid._serialized ??
++            wid.$1 ??
++            (typeof wid.toString === 'function' ? wid.toString() : undefined)
++        );
++    };
++
++    window.WWebJS.normalizeSerialized = (obj, depth = 0) => {
++        if (!obj || typeof obj !== 'object' || depth > 8) return obj;
++        if (Array.isArray(obj)) {
++            for (const item of obj) {
++                window.WWebJS.normalizeSerialized(item, depth + 1);
++            }
++            return obj;
++        }
++        if (obj.$1 !== undefined && obj._serialized === undefined) {
++            obj._serialized = obj.$1;
++        }
++        for (const key of Object.keys(obj)) {
++            const value = obj[key];
++            if (value && typeof value === 'object') {
++                window.WWebJS.normalizeSerialized(value, depth + 1);
++            }
++        }
++        return obj;
++    };
++
+     /**
+      * Helper function that compares between two WWeb versions. Its purpose is to help the developer to choose the correct code implementation depending on the comparison value and the WWeb version.
+      * @param {string} lOperand The left operand for the WWeb version string to compare with
+@@ -830,13 +862,13 @@ exports.LoadUtils = () => {
+
+         if (typeof msg.id.remote === 'object') {
+             msg.id = Object.assign({}, msg.id, {
+-                remote: msg.id.remote._serialized,
++                remote: window.WWebJS.widSerialized(msg.id.remote),
+             });
+         }
+
+         delete msg.pendingAckUpdate;
+
+-        return msg;
++        return window.WWebJS.normalizeSerialized(msg);
+     };
+
+     window.WWebJS.getChat = async (chatId, { getAsModel = true } = {}) => {
+@@ -919,10 +951,16 @@ exports.LoadUtils = () => {
 
      window.WWebJS.getChats = async () => {
          const chats = window.require('WAWebCollections').Chat.getModelsArray();
@@ -22,7 +170,66 @@ index dfa30a5..bb1a1fa 100644
      };
 
      window.WWebJS.getChannels = async () => {
-@@ -1125,41 +1131,47 @@ exports.LoadUtils = () => {
+@@ -953,7 +991,7 @@ exports.LoadUtils = () => {
+             model.isGroup = true;
+             const chatWid = window
+                 .require('WAWebWidFactory')
+-                .createWid(chat.id._serialized);
++                .createWid(window.WWebJS.widSerialized(chat.id));
+             const groupMetadata =
+                 window.require('WAWebCollections').GroupMetadata ||
+                 window.require('WAWebCollections').WAWebGroupMetadataCollection;
+@@ -981,28 +1019,33 @@ exports.LoadUtils = () => {
+
+         model.lastMessage = null;
+         if (model.msgs && model.msgs.length) {
+-            const lastMessage = chat.lastReceivedKey
+-                ? window
+-                      .require('WAWebCollections')
+-                      .Msg.get(chat.lastReceivedKey._serialized) ||
+-                  (
+-                      await window
+-                          .require('WAWebCollections')
+-                          .Msg.getMessagesById([
+-                              chat.lastReceivedKey._serialized,
+-                          ])
+-                  )?.messages?.[0]
+-                : null;
+-            lastMessage &&
+-                (model.lastMessage =
+-                    window.WWebJS.getMessageModel(lastMessage));
++            try {
++                const lastKeyId = window.WWebJS.widSerialized(
++                    chat.lastReceivedKey,
++                );
++                const lastMessage = lastKeyId
++                    ? window.require('WAWebCollections').Msg.get(lastKeyId) ||
++                      (
++                          await window
++                              .require('WAWebCollections')
++                              .Msg.getMessagesById([lastKeyId])
++                      )?.messages?.[0]
++                    : null;
++                lastMessage &&
++                    (model.lastMessage =
++                        window.WWebJS.getMessageModel(lastMessage));
++            } catch (_) {
++                // A changed key representation must not make the complete
++                // chat model unavailable to the worker.
++                model.lastMessage = null;
++            }
+         }
+
+         delete model.msgs;
+         delete model.msgUnsyncedButtonReplyMsgs;
+         delete model.unsyncedButtonReplies;
+
+-        return model;
++        return window.WWebJS.normalizeSerialized(model);
+     };
+
+     window.WWebJS.getContactModel = (contact) => {
+@@ -1125,41 +1168,85 @@ exports.LoadUtils = () => {
              return null;
          }
 
@@ -42,8 +249,7 @@ index dfa30a5..bb1a1fa 100644
 -            return null;
 -        }
 +        // A message event can arrive before the Web client has hydrated the
-+        // encrypted media blob. Keep the wait bounded: this is a recovery for
-+        // a single received attachment, never a background media scan.
++        // encrypted media blob. Keep this bounded to the single attachment.
 +        for (let attempt = 0; attempt < 20; attempt++) {
 +            try {
 +                await msg.downloadMedia({
@@ -64,13 +270,13 @@ index dfa30a5..bb1a1fa 100644
 -            .require('WAWebMediaInMemoryBlobCache')
 -            .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
 +            const stage = msg.mediaData?.mediaStage;
-+            if (typeof stage === 'string' && stage.includes('ERROR')) return null;
 +            if (stage !== 'FETCHING') {
 +                const cached = window
 +                    .require('WAWebMediaInMemoryBlobCache')
-+                    .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
++                    ?.InMemoryMediaBlobCache?.get(msg.mediaObject?.filehash);
 +
-+                const blob = cached || msg.mediaObject?.mediaBlob?.forceToBlob();
++                const blob =
++                    cached || msg.mediaObject?.mediaBlob?.forceToBlob?.();
 +                if (blob) {
 +                    return {
 +                        blob,
@@ -90,7 +296,45 @@ index dfa30a5..bb1a1fa 100644
          }
 
 -        if (!blob) return null;
--
++        // Newer WhatsApp Web builds may not retain the decrypted file in the
++        // in-memory blob cache for LID chats. Use the same Web download
++        // manager with the fields already present in this live message model;
++        // nothing is copied to Node, logged or persisted here.
++        try {
++            const mockQpl = {
++                addAnnotations: function () {
++                    return this;
++                },
++                addPoint: function () {
++                    return this;
++                },
++            };
++            const decryptedMedia = await window
++                .require('WAWebDownloadManager')
++                .downloadManager.downloadAndMaybeDecrypt({
++                    directPath: msg.directPath,
++                    encFilehash: msg.encFilehash,
++                    filehash: msg.filehash,
++                    mediaKey: msg.mediaKey,
++                    mediaKeyTimestamp: msg.mediaKeyTimestamp,
++                    type: msg.type,
++                    signal: new AbortController().signal,
++                    downloadQpl: mockQpl,
++                });
++            if (decryptedMedia) {
++                return {
++                    blob: new Blob([decryptedMedia], {
++                        type: msg.mimetype || 'application/octet-stream',
++                    }),
++                    mimetype: msg.mimetype,
++                    filename: msg.filename,
++                    filesize: msg.size,
++                };
++            }
++        } catch (error) {
++            if (error?.status && error.status !== 404) return null;
++        }
+
 -        return {
 -            blob,
 -            mimetype: msg.mimetype,
