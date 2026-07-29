@@ -14,7 +14,7 @@ La conexión se confirma normalmente con el evento `ready`. Ese evento se acepta
 
 La recepción usa primero los eventos públicos `message` y `message_create`. Como respaldo controlado, revisa periódicamente solo los chats cuya actividad cambió después de conectar y obtiene un máximo acotado de mensajes recientes por chat. PostgreSQL deduplica por cuenta e identificador externo. Si la API masiva `getChats()` falla tres veces, este respaldo se pausa hasta una reconexión; los eventos de mensajes en tiempo real continúan activos. No se ejecuta una importación completa de historial ni se comprueban números de teléfono.
 
-El worker no persiste una copia local del HTML de WhatsApp Web: así evita reutilizar tras un reinicio una versión de página que haya resultado incompatible con el inyector de la librería. Solo persiste el perfil `LocalAuth` dentro del volumen. Si la sesión no llega a emitir `ready` y tampoco expone `getChats()` dentro del plazo de inicio, la cuenta queda en error y el worker se reinicia con *backoff*, conservando ese perfil. No se muestra como conectada de forma engañosa. Los logs incluyen categorías y huellas irreversibles de errores de navegador para correlacionar fallos sin revelar datos de WhatsApp.
+El worker no persiste una copia local del HTML de WhatsApp Web: así evita reutilizar tras un reinicio una versión de página que haya resultado incompatible con el inyector de la librería. Solo persiste el perfil `LocalAuth` dentro del volumen. Si la sesión no llega a emitir `ready` ni a confirmar su estado público dentro del plazo de inicio, la cuenta queda en error y el worker se reinicia con *backoff*, conservando ese perfil. No se muestra como conectada de forma engañosa. Los logs incluyen categorías y huellas irreversibles de errores de navegador para correlacionar fallos sin revelar datos de WhatsApp.
 
 ## Funciones
 
@@ -56,7 +56,7 @@ Para iniciar una conversación nueva, el número debe existir como contacto `IMP
 | Cloudflare R2 privado | Objetos de imagen, audio y vídeo. No se publica el bucket ni se usan URLs permanentes. |
 | `/data/wwebjs-auth` | Perfiles `LocalAuth` de Chromium de cada cuenta (`session-<accountId>`). Son secretos. |
 
-Cada cuenta debe vincularse mediante QR. Desde la integración, una desvinculación explícita y confirmada borra solo el perfil web de esa cuenta, nunca el de otra cuenta.
+Cada cuenta debe vincularse mediante QR una sola vez por perfil. Un reinicio o despliegue reutiliza `/data/wwebjs-auth/session-<accountId>` y no debe requerir un QR nuevo. Si el estado aparece como `ERROR` o `CONNECTING`, usa **Reintentar conexión**: conserva el perfil y solicita al worker que lo reutilice. Solo **Desvincular y generar nuevo QR**, con confirmación explícita, borra el perfil web de esa cuenta; nunca el de otra cuenta. Si WhatsApp invalida realmente la sesión, el worker emitirá un QR nuevo y será necesaria la vinculación manual.
 
 Las identidades externas de conversación permiten enlazar chats de WhatsApp Web (`<teléfono>@c.us` y `<id>@g.us`) con conversaciones ya existentes, para no duplicar el histórico anterior.
 
@@ -124,12 +124,14 @@ R2 debe permanecer privado: no actives `r2.dev`, dominio público ni credenciale
 ## Railway
 
 1. Crea un servicio PostgreSQL y un servicio de esta aplicación desde GitHub.
-2. Monta un único volumen en `/data` y configura `WA_WEB_AUTH_DIR=/data/wwebjs-auth`.
+2. Monta un único volumen persistente en `/data` y configura `WA_WEB_AUTH_DIR=/data/wwebjs-auth`. No sustituyas el volumen entre despliegues ni cambies esta variable: ambas acciones hacen que el perfil parezca ausente y requerirán QR.
 3. Configura `DATABASE_URL=${{Postgres.DATABASE_URL}}`, el resto de variables y el bucket R2 privado.
 4. Despliega una sola réplica. Next.js y el worker comparten el mismo contenedor y el mismo volumen.
 5. Configura `/api/health` como healthcheck público.
 
 La imagen está basada en `node:22-bookworm-slim`, instala Chromium y `chromium-sandbox` de Debian y ejecuta Next.js y el worker como un usuario sin privilegios. El entrypoint prepara solo `/data/wwebjs-auth` para ese usuario. No se inicia Chromium, no se aplican migraciones y no se escribe en `/data` durante el build.
+
+Tras un despliegue sano, los logs deben mostrar `connection.session_profile` con `profile:"PRESENT"`, seguido de `connection.authenticated` y `connection.open`. `profile:"MISSING"` indica un problema de volumen o de `WA_WEB_AUTH_DIR`, no una sesión que el código haya eliminado. Una `connection.auth_failure` indica que WhatsApp invalidó la sesión y sí requiere volver a vincularla.
 
 El runtime de Railway bloquea los *namespaces* que necesita el sandbox de Chromium. Por ello la imagen activa explícitamente `PUPPETEER_NO_SANDBOX=true` y usa `--no-sandbox` junto con `--disable-setuid-sandbox`. Es una reducción de aislamiento del navegador: se compensa parcialmente ejecutando la aplicación como usuario sin privilegios, sin exponer el depurador de Chromium y manteniendo una sola réplica, pero no equivale al sandbox normal. No actives esos flags en desarrollo salvo que el entorno lo exija.
 

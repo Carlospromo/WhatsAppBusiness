@@ -9,6 +9,7 @@ type Connection = {
   hasQr: boolean;
   updatedAt: string | null;
   outboundRestricted?: boolean;
+  sessionProfilePresent?: boolean;
 };
 
 export function IntegrationPanel({ accountId, accountName, active, initial }: { accountId: string; accountName: string; active: boolean; initial: Connection }) {
@@ -26,18 +27,17 @@ export function IntegrationPanel({ accountId, accountName, active, initial }: { 
     return () => window.clearInterval(timer);
   }, [accountId, refresh]);
 
-  async function requestLink() {
-    const relink = connection.status === "CONNECTED";
-    if (!window.confirm("Se eliminará únicamente el perfil de WhatsApp Web de esta cuenta para generar un QR nuevo. La sesión heredada no se tocará. ¿Continuar?")) return;
-    setStatus("Solicitando código QR…");
+  async function requestConnection(action: "retry" | "relink") {
+    if (action === "relink" && !window.confirm("Se eliminará únicamente el perfil de WhatsApp Web de esta cuenta para generar un QR nuevo. La sesión heredada no se tocará. ¿Continuar?")) return;
+    setStatus(action === "retry" ? "Reintentando la conexión con la sesión guardada…" : "Solicitando código QR…");
     const response = await fetch(`/api/admin/accounts/${accountId}/connection`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ relink }),
+      body: JSON.stringify({ action }),
     });
     const data = await response.json().catch(() => ({}));
     setStatus(response.ok
-      ? data.reusedQr ? "El QR vigente ya está disponible para escanear." : "El worker preparará el QR. Espera unos segundos y escanéalo desde WhatsApp."
+      ? data.reusedQr ? "El QR vigente ya está disponible para escanear." : data.retrying ? "El worker reutilizará la sesión guardada. No se generará un QR salvo que WhatsApp la haya invalidado." : "El worker preparará el QR. Espera unos segundos y escanéalo desde WhatsApp."
       : data.error || "No se pudo solicitar la vinculación.");
     setRefresh((value) => value + 1);
   }
@@ -52,7 +52,11 @@ export function IntegrationPanel({ accountId, accountName, active, initial }: { 
     {connection.maskedPhone && <p className="mt-1 text-sm text-slate-600">Número vinculado: {connection.maskedPhone}</p>}
     {!active ? <p className="mt-4 rounded bg-amber-50 p-3 text-sm text-amber-800">Esta cuenta está desactivada. Reactívala desde Gestión de cuentas para vincularla.</p> : <>
       <p className="mt-3 text-sm text-slate-600">Tras la migración, cada cuenta necesita vincularse una vez mediante QR. El perfil legado no se borra automáticamente.</p>
-      <button type="button" onClick={requestLink} className="mt-4 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white">{connection.status === "CONNECTED" ? "Desvincular y generar nuevo QR" : "Solicitar una nueva vinculación"}</button>
+      {connection.status !== "WAITING_FOR_QR" && connection.sessionProfilePresent && connection.status !== "CONNECTED" && <button type="button" onClick={() => void requestConnection("retry")} className="mt-4 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white">Reintentar conexión</button>}
+      {connection.status !== "CONNECTED" && !connection.sessionProfilePresent && <button type="button" onClick={() => void requestConnection("relink")} className="mt-4 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white">Solicitar una nueva vinculación</button>}
+      {connection.status === "CONNECTED" && <button type="button" onClick={() => void requestConnection("relink")} className="mt-4 rounded-md border border-rose-700 px-3 py-2 text-sm font-medium text-rose-700">Desvincular y generar nuevo QR</button>}
+      {connection.status === "WAITING_FOR_QR" && <button type="button" onClick={() => void requestConnection("relink")} className="mt-4 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700">Generar un QR nuevo</button>}
+      {connection.sessionProfilePresent && connection.status !== "CONNECTED" && <p className="mt-2 text-xs text-slate-500">La sesión guardada se conservará durante el reintento. Solo se borrará si eliges generar un QR nuevo.</p>}
       {connection.hasQr ? <div className="mt-5">
         <p className="text-sm text-slate-600">En el teléfono abre WhatsApp → Dispositivos vinculados → Vincular un dispositivo y escanea este QR.</p>
         <img className="mt-3 rounded-lg border" src={`/api/admin/whatsapp/qr?accountId=${accountId}&v=${encodeURIComponent(qrVersion)}`} alt="Código QR para vincular WhatsApp" width="280" height="280" onError={() => { setStatus("El QR ha caducado. Se actualizará automáticamente en unos segundos."); setRefresh((value) => value + 1); }} />

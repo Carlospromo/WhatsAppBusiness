@@ -1,7 +1,6 @@
 /* WhatsApp Web worker: each active account owns one isolated Chromium profile. */
 import "dotenv/config";
-import { access, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, rm } from "node:fs/promises";
 import whatsappWeb from "whatsapp-web.js";
 import type { Client as WhatsAppWebClient, Contact, Message } from "whatsapp-web.js";
 import { WhatsAppBridgeType, WhatsAppConnectionStatus } from "@prisma/client";
@@ -19,6 +18,7 @@ import { canDispatchOutbound } from "./lib/whatsapp/outbound-safety";
 import { changedChatWatermarks, seedChatWatermarks } from "./lib/whatsapp/inbound-reconciliation";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 import { verifyMediaStorageAccess } from "./lib/media-storage";
+import { hasWebSessionProfile, webSessionClientId, webSessionProfilePath } from "./lib/whatsapp/web-session";
 
 const { Client, LocalAuth, MessageAck } = whatsappWeb;
 const authRoot = process.env.WA_WEB_AUTH_DIR || "/data/wwebjs-auth";
@@ -76,9 +76,9 @@ const presence = new TransientPresenceManager(3_000, (accountId, error) => {
   operationalLog("presence.update_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "debug");
 });
 
-function clientId(accountId: string) { return accountId.replace(/[^a-zA-Z0-9_-]/g, "_"); }
-function profilePath(accountId: string) { return join(authRoot, `session-${clientId(accountId)}`); }
-function hasProfile(accountId: string) { return access(profilePath(accountId)).then(() => true).catch(() => false); }
+function clientId(accountId: string) { return webSessionClientId(accountId); }
+function profilePath(accountId: string) { return webSessionProfilePath(accountId, authRoot); }
+function hasProfile(accountId: string) { return hasWebSessionProfile(accountId, authRoot); }
 
 /**
  * WhatsApp Web is gradually moving serialized identifiers from `_serialized`
@@ -690,6 +690,9 @@ async function connect(accountId: string) {
       operationalLog("connection.state_changed", { account: safeLogRef(accountId), state: safeConnectionState(state) });
     });
     activeClient.on("auth_failure", () => void enqueueAccountWork(accountId, async () => {
+      // A late event from a Chromium instance that has already been replaced
+      // must not overwrite the status of the newer, healthy session.
+      if (clients.get(accountId) !== activeClient) return;
       await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "No se pudo autenticar la sesión de WhatsApp Web.", bridgeType: WhatsAppBridgeType.WWEBJS });
       await auditConnection(accountId, "WHATSAPP_AUTH_FAILURE");
       operationalLog("connection.auth_failure", { account: safeLogRef(accountId) }, "error");
