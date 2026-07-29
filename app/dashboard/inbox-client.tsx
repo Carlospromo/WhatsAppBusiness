@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DirectMessageComposer } from "./direct-message-composer";
 import { MessageComposer } from "./message-composer";
 
@@ -80,6 +80,14 @@ function mergeById<T extends { id: string }>(older: T[], newer: T[]) {
   });
 }
 
+function sortConversationsByRecent(conversations: Conversation[]) {
+  return [...conversations].sort((left, right) => {
+    const leftTime = left.lastMessageAt ? new Date(left.lastMessageAt).getTime() : 0;
+    const rightTime = right.lastMessageAt ? new Date(right.lastMessageAt).getTime() : 0;
+    return rightTime - leftTime || right.id.localeCompare(left.id);
+  });
+}
+
 function MediaContent({ attachment, outbound }: { attachment: MediaAttachment; outbound: boolean }) {
   const source = `/api/media/${attachment.id}`;
   const stateClass = outbound ? "text-emerald-50" : "text-slate-500";
@@ -104,7 +112,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   connectionStatuses: Record<string, string>;
 }) {
   const router = useRouter();
-  const [rows, setRows] = useState(initialRows);
+  const [rows, setRows] = useState(() => sortConversationsByRecent(initialRows));
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   const [detail, setDetail] = useState<ConversationResponse | null>(null);
@@ -113,6 +121,10 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   const [loadingMore, setLoadingMore] = useState(false);
   const [directComposerOpen, setDirectComposerOpen] = useState(false);
   const [locallyReadIds, setLocallyReadIds] = useState<Set<string>>(() => new Set());
+  const messageScrollerRef = useRef<HTMLDivElement>(null);
+  const shouldScrollThreadToBottom = useRef(Boolean(initialSelectedId));
+  const threadWasAtBottom = useRef(true);
+  const renderedThreadRef = useRef<{ conversationId: string; lastMessageId: string | null } | null>(null);
   const canManage = role === "ADMIN" || role === "AGENT";
 
   const pageUrl = useCallback((changes: { account?: string | null; filter?: string; selected?: string | null } = {}) => {
@@ -164,9 +176,10 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
       setDetail(normalized);
       setRows((current) => {
         const existing = current.find((item) => item.id === normalized.conversation.id);
-        return existing
+        const next = existing
           ? current.map((item) => item.id === normalized.conversation.id ? { ...item, ...normalized.conversation } : item)
           : [normalized.conversation, ...current];
+        return sortConversationsByRecent(next);
       });
       if (data.conversation.unreadCount > 0 && !locallyReadIds.has(id)) void markRead(id);
     } catch {
@@ -184,6 +197,21 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
     }
     void loadConversation(selectedId);
   }, [loadConversation, selectedId]);
+
+  useLayoutEffect(() => {
+    const scroller = messageScrollerRef.current;
+    if (!scroller || !detail) return;
+    const lastMessageId = detail.messages.at(-1)?.id ?? null;
+    const previous = renderedThreadRef.current;
+    const changedConversation = previous?.conversationId !== detail.conversation.id;
+    const hasNewLastMessage = previous?.conversationId === detail.conversation.id && previous.lastMessageId !== lastMessageId;
+    if (shouldScrollThreadToBottom.current || changedConversation || (hasNewLastMessage && threadWasAtBottom.current)) {
+      scroller.scrollTop = scroller.scrollHeight;
+      shouldScrollThreadToBottom.current = false;
+      threadWasAtBottom.current = true;
+    }
+    renderedThreadRef.current = { conversationId: detail.conversation.id, lastMessageId };
+  }, [detail]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -205,6 +233,8 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
     setSelectedId(id);
     setDetail(null);
     setConversationError("");
+    shouldScrollThreadToBottom.current = true;
+    threadWasAtBottom.current = true;
     router.replace(pageUrl({ selected: id }));
   }
 
@@ -239,7 +269,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
       const response = await fetch(`/api/conversations?${params.toString()}`, { cache: "no-store" });
       const data = await response.json().catch(() => null) as { rows?: Conversation[]; nextCursor?: string | null } | null;
       if (!response.ok || !data?.rows) throw new Error("conversations_unavailable");
-      setRows((current) => mergeById(current, data.rows!));
+      setRows((current) => sortConversationsByRecent(mergeById(current, data.rows!)));
       setNextCursor(data.nextCursor ?? null);
     } finally {
       setLoadingMore(false);
@@ -302,7 +332,10 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
               <div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-slate-900">{selectedName}</h2><p className="truncate text-xs text-slate-500">{selectedConversation.account.name}{selectedPhone && selectedPhone !== selectedName ? ` · ${selectedPhone}` : ""}{hasExternalContact ? " · Contacto externo" : ""}</p></div>
               {hasExternalContact && <span className="hidden rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800 sm:inline">Externo</span>}
             </header>}
-            <div className="min-h-0 flex-1 overflow-y-scroll bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef5f2)] px-3 py-4 [scrollbar-gutter:stable] sm:px-6">
+            <div ref={messageScrollerRef} onScroll={(event) => {
+              const element = event.currentTarget;
+              threadWasAtBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+            }} className="min-h-0 flex-1 overflow-y-scroll bg-[radial-gradient(circle_at_top,_#f8fafc,_#eef5f2)] px-3 py-4 [scrollbar-gutter:stable] sm:px-6">
               {loadingConversation && <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>}
               {conversationError && <div className="mx-auto max-w-md rounded-xl border border-rose-200 bg-rose-50 p-4 text-center text-sm text-rose-800"><p>{conversationError}</p><button type="button" onClick={() => selectedId && void loadConversation(selectedId)} className="mt-2 font-medium underline">Reintentar</button></div>}
               {detail && <div className="mx-auto flex max-w-3xl flex-col gap-2">
