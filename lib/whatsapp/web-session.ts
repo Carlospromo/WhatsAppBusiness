@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, lstat, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 export function webSessionClientId(accountId: string) {
@@ -20,4 +20,34 @@ export async function hasWebSessionProfile(accountId: string, authRoot?: string)
   } catch {
     return false;
   }
+}
+
+/**
+ * Chromium writes these process-lock entries at the root of its user-data
+ * directory. A container replacement can leave them behind even though the
+ * process that owned them has already stopped. They are not WhatsApp session
+ * data; removing only these entries lets the next Chromium process reopen the
+ * persisted LocalAuth profile.
+ *
+ * Call this only when the caller has established exclusive ownership of the
+ * account profile (this worker uses one client per account and one replica).
+ */
+export async function clearStaleWebSessionLocks(accountId: string, authRoot?: string) {
+  const profile = webSessionProfilePath(accountId, authRoot);
+  const lockNames = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
+  let cleared = 0;
+  for (const lockName of lockNames) {
+    try {
+      const lockPath = join(profile, lockName);
+      await lstat(lockPath);
+      await rm(lockPath, { force: true });
+      cleared += 1;
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      // A permissions or filesystem error must stop startup rather than risk
+      // silently changing any part of the profile.
+      throw error;
+    }
+  }
+  return cleared;
 }

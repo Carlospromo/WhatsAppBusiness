@@ -18,7 +18,7 @@ import { canDispatchOutbound } from "./lib/whatsapp/outbound-safety";
 import { changedChatWatermarks, seedChatWatermarks } from "./lib/whatsapp/inbound-reconciliation";
 import { operationalLog, safeErrorInfo, safeLogRef } from "./lib/operational-log";
 import { verifyMediaStorageAccess } from "./lib/media-storage";
-import { hasWebSessionProfile, webSessionClientId, webSessionProfilePath } from "./lib/whatsapp/web-session";
+import { clearStaleWebSessionLocks, hasWebSessionProfile, webSessionClientId, webSessionProfilePath } from "./lib/whatsapp/web-session";
 
 const { Client, LocalAuth, MessageAck } = whatsappWeb;
 const authRoot = process.env.WA_WEB_AUTH_DIR || "/data/wwebjs-auth";
@@ -628,11 +628,18 @@ async function connect(accountId: string) {
   if (stopping || connecting.has(accountId) || clients.has(accountId) || !(await isAccountActive(accountId))) return;
   connecting.add(accountId);
   let client: WhatsAppWebClient | undefined;
+  let startupStage = "profile_prepare";
   try {
     await mkdir(authRoot, { recursive: true });
-    operationalLog("connection.session_profile", { account: safeLogRef(accountId), profile: await hasProfile(accountId) ? "PRESENT" : "MISSING" });
+    const profilePresent = await hasProfile(accountId);
+    operationalLog("connection.session_profile", { account: safeLogRef(accountId), profile: profilePresent ? "PRESENT" : "MISSING" });
+    if (profilePresent) {
+      const clearedLocks = await clearStaleWebSessionLocks(accountId, authRoot);
+      if (clearedLocks) operationalLog("connection.profile_locks_cleared", { account: safeLogRef(accountId), count: clearedLocks });
+    }
     operationalLog("connection.connecting", { account: safeLogRef(accountId) });
     await updateConnection(accountId, { status: WhatsAppConnectionStatus.CONNECTING, qrCode: null, qrExpiresAt: null, lastError: null, bridgeType: WhatsAppBridgeType.WWEBJS });
+    startupStage = "client_create";
     client = new Client({
       authStrategy: new LocalAuth({ dataPath: authRoot, clientId: clientId(accountId) }),
       authTimeoutMs: readyTimeoutMs,
@@ -729,6 +736,7 @@ async function connect(accountId: string) {
       }
     }));
     operationalLog("inbound.event_listeners_registered", { account: safeLogRef(accountId), bridge: "WWEBJS" });
+    startupStage = "client_initialize";
     await activeClient.initialize();
   } catch (error) {
     // whatsapp-web.js can report a late ready/injection failure after the
@@ -740,7 +748,7 @@ async function connect(accountId: string) {
       return;
     }
     if (client) await closeClient(accountId, client);
-    operationalLog("connection.start_failed", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error");
+    operationalLog("connection.start_failed", { account: safeLogRef(accountId), stage: startupStage, ...safeErrorInfo(error) }, "error");
     if (!stopping && await isAccountActive(accountId)) {
       await updateConnection(accountId, { status: WhatsAppConnectionStatus.ERROR, qrCode: null, qrExpiresAt: null, lastError: "No se pudo iniciar WhatsApp Web; se reintentará.", bridgeType: WhatsAppBridgeType.WWEBJS });
       scheduleReconnect(accountId);

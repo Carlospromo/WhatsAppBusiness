@@ -23,6 +23,7 @@ describe("WhatsApp Web worker runtime", () => {
     expect(worker).toContain("conversationResolution");
     expect(worker).toContain("failed best-effort chat scan must never turn a persisted LocalAuth session");
     expect(worker).toContain("connection.session_profile");
+    expect(worker).toContain("connection.profile_locks_cleared");
     expect(worker).toContain("webSessionProfilePath");
     expect(worker).toContain("clients.get(accountId) !== activeClient");
     expect(worker).toContain("media.storage_access_ok");
