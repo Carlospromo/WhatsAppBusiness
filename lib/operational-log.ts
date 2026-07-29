@@ -22,19 +22,25 @@ export function safeErrorInfo(error: unknown): SafeFields {
     ? "WWEBJS_READY_TIMEOUT"
     : /auth timeout/i.test(message)
       ? "WWEBJS_AUTH_TIMEOUT"
-      : /target closed|session closed/i.test(message)
-        ? "BROWSER_CLOSED"
-        : /sandbox|namespace/i.test(message)
-          ? "BROWSER_SANDBOX"
-            : /navigation timeout/i.test(message)
-              ? "BROWSER_NAVIGATION_TIMEOUT"
-              : /execution context|detached frame/i.test(message)
-                ? "BROWSER_CONTEXT_LOST"
-                : /protocol error/i.test(message)
-                  ? "BROWSER_PROTOCOL"
-                  : /cannot read properties of undefined|is not a function/i.test(message)
-                    ? "WWEBJS_INJECTION_FAILED"
-                    : undefined;
+      : /profile.*(in use|already)|singleton(lock|cookie|socket)|user data directory/i.test(message)
+        ? "BROWSER_PROFILE_LOCKED"
+          : /failed to launch (the )?browser|browser process/i.test(message)
+            ? "BROWSER_LAUNCH"
+            : /target closed|session closed/i.test(message)
+              ? "BROWSER_CLOSED"
+              : /sandbox|namespace/i.test(message)
+                ? "BROWSER_SANDBOX"
+                : /navigation timeout/i.test(message)
+                  ? "BROWSER_NAVIGATION_TIMEOUT"
+                  : /execution context|detached frame/i.test(message)
+                    ? "BROWSER_CONTEXT_LOST"
+                    : /protocol error/i.test(message)
+                      ? "BROWSER_PROTOCOL"
+                      : /evaluation failed|evaluate.*failed/i.test(message)
+                        ? "WWEBJS_PAGE_EVALUATION"
+                        : /cannot read properties of undefined|is not a function/i.test(message)
+                          ? "WWEBJS_INJECTION_FAILED"
+                          : undefined;
   // A one-way digest lets operators correlate recurring failures without
   // putting a browser/WhatsApp error (which can include private data) in logs.
   const errorFingerprint = message ? createHash("sha256").update(message).digest("hex").slice(0, 12) : undefined;

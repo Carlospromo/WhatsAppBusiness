@@ -133,6 +133,8 @@ La imagen está basada en `node:22-bookworm-slim`, instala Chromium y `chromium-
 
 Tras un despliegue sano, los logs deben mostrar `connection.session_profile` con `profile:"PRESENT"`, seguido de `connection.authenticated` y `connection.open`. `profile:"MISSING"` indica un problema de volumen o de `WA_WEB_AUTH_DIR`, no una sesión que el código haya eliminado. Una `connection.auth_failure` indica que WhatsApp invalidó la sesión y sí requiere volver a vincularla.
 
+Al reemplazar un contenedor, Chromium puede dejar marcadores efímeros `SingletonLock`, `SingletonCookie` y `SingletonSocket` dentro del perfil. Antes de reutilizar una sesión, el worker elimina únicamente esos tres marcadores y registra `connection.profile_locks_cleared`; no elimina cookies, IndexedDB ni ningún dato de autenticación. Si el inicio falla, `connection.start_failed` incluye una fase segura (`profile_prepare`, `client_create` o `client_initialize`) y una categoría sin datos privados para diagnosticarlo.
+
 El runtime de Railway bloquea los *namespaces* que necesita el sandbox de Chromium. Por ello la imagen activa explícitamente `PUPPETEER_NO_SANDBOX=true` y usa `--no-sandbox` junto con `--disable-setuid-sandbox`. Es una reducción de aislamiento del navegador: se compensa parcialmente ejecutando la aplicación como usuario sin privilegios, sin exponer el depurador de Chromium y manteniendo una sola réplica, pero no equivale al sandbox normal. No actives esos flags en desarrollo salvo que el entorno lo exija.
 
 ## Migración controlada
