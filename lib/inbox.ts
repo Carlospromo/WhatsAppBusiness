@@ -2,8 +2,23 @@ import { ConversationType, MessageDirection, OutboundMessageStatus, WhatsAppBrid
 import { prisma } from "./prisma";
 import { visibleConversation } from "./conversation-identity";
 
-const pageSize = 30;
+// The client loads further pages automatically as the operator reaches the
+// bottom of the sidebar. Keep each query bounded, but do not impose a
+// practical maximum on the number of conversations that can be reached.
+export const conversationPageSize = 100;
 const textLimit = 2000;
+
+/**
+ * Use the final visible item as the cursor. Using the extra look-ahead row
+ * would skip that row when Prisma starts after the cursor on the next page.
+ */
+export function conversationPage<T extends { id: string }>(rows: T[], pageSize = conversationPageSize) {
+  const visibleRows = rows.slice(0, pageSize);
+  return {
+    rows: visibleRows,
+    nextCursor: rows.length > pageSize ? visibleRows.at(-1)?.id ?? null : null,
+  };
+}
 
 export function parseCursor(value: string | null) {
   return value && /^[a-zA-Z0-9_-]{10,40}$/.test(value) ? value : undefined;
@@ -50,11 +65,11 @@ export async function listConversations(query: { accountIds: string[]; accountId
       account: { select: { id: true, name: true, slug: true } },
     },
     orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
+    take: conversationPageSize + 1,
     ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
   });
-  const next = rows.length > pageSize ? rows.pop()!.id : null;
-  return { rows: rows.map(visibleConversation), nextCursor: next };
+  const page = conversationPage(rows);
+  return { rows: page.rows.map(visibleConversation), nextCursor: page.nextCursor };
 }
 
 export async function queueOutboundMessage(conversationId: string, accountId: string, userId: string, body: string) {
