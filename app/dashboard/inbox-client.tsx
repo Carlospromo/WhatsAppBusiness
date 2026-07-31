@@ -101,10 +101,11 @@ function MediaContent({ attachment, outbound }: { attachment: MediaAttachment; o
   return <div><video controls preload="metadata" className="max-h-80 max-w-full rounded-xl bg-slate-900" src={source}>Tu navegador no puede reproducir este vídeo.</video>{download}</div>;
 }
 
-export function InboxClient({ accounts, initialRows, initialNextCursor, initialSelectedId, accountId, filter, search, role, connectionStatuses }: {
+export function InboxClient({ accounts, initialRows, initialNextCursor, initialTotal, initialSelectedId, accountId, filter, search, role, connectionStatuses }: {
   accounts: Account[];
   initialRows: Conversation[];
   initialNextCursor: string | null;
+  initialTotal: number;
   initialSelectedId: string | null;
   accountId?: string;
   filter: string;
@@ -115,6 +116,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   const router = useRouter();
   const [rows, setRows] = useState(() => sortConversationsByRecent(initialRows));
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
+  const [totalConversations, setTotalConversations] = useState(initialTotal);
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   const [detail, setDetail] = useState<ConversationResponse | null>(null);
   const [loadingConversation, setLoadingConversation] = useState(false);
@@ -277,10 +279,11 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
       if (accountId) params.set("accountId", accountId);
       if (search) params.set("q", search);
       const response = await fetch(`/api/conversations?${params.toString()}`, { cache: "no-store" });
-      const data = await response.json().catch(() => null) as { rows?: Conversation[]; nextCursor?: string | null } | null;
+      const data = await response.json().catch(() => null) as { rows?: Conversation[]; nextCursor?: string | null; total?: number } | null;
       if (!response.ok || !data?.rows) throw new Error("conversations_unavailable");
       setRows((current) => sortConversationsByRecent(mergeById(current, data.rows!)));
       setNextCursor(data.nextCursor ?? null);
+      if (typeof data.total === "number") setTotalConversations(data.total);
     } finally {
       setLoadingMore(false);
     }
@@ -325,6 +328,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
           <nav className="flex gap-1 overflow-x-auto border-b border-slate-100 p-2" aria-label="Filtros">
             {filters.map(([id, label]) => <Link key={id} href={pageUrl({ filter: id, selected: null })} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === id || (id === "all" && !filter) ? "bg-emerald-50 text-emerald-800" : "text-slate-500 hover:bg-slate-50"}`}>{label}</Link>)}
           </nav>
+          <p className="border-b border-slate-100 px-3 py-1.5 text-[11px] text-slate-400" aria-live="polite">{rows.length} de {totalConversations} conversaciones cargadas</p>
           <div onScroll={loadMoreWhenSidebarReachesEnd} className="min-h-0 flex-1 overflow-y-scroll [scrollbar-gutter:stable]">
             {rows.length ? rows.map((conversation) => {
               const name = conversationName(conversation);

@@ -51,7 +51,8 @@ export async function listConversations(query: { accountIds: string[]; accountId
     ...(query.filter === "group" ? { type: ConversationType.GROUP } : {}),
     ...(search ? { OR: [{ contact: { displayName: { contains: search } } }, { contact: { pushName: { contains: search } } }, { contact: { phone: { contains: search } } }, { contact: { addressBookContact: { displayName: { contains: search } } } }] } : {}),
   };
-  const rows = await prisma.conversation.findMany({
+  const [rows, total] = await prisma.$transaction([
+    prisma.conversation.findMany({
     where,
     select: {
       id: true,
@@ -67,9 +68,11 @@ export async function listConversations(query: { accountIds: string[]; accountId
     orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
     take: conversationPageSize + 1,
     ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-  });
+    }),
+    prisma.conversation.count({ where }),
+  ]);
   const page = conversationPage(rows);
-  return { rows: page.rows.map(visibleConversation), nextCursor: page.nextCursor };
+  return { rows: page.rows.map(visibleConversation), nextCursor: page.nextCursor, total };
 }
 
 export async function queueOutboundMessage(conversationId: string, accountId: string, userId: string, body: string) {
