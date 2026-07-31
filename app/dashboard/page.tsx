@@ -16,7 +16,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const accountId = params.account && await canAccessAccount(user, params.account) ? params.account : undefined;
   const filter = validFilters.has(params.filter || "") ? params.filter || "all" : "all";
   const search = params.q?.trim().slice(0, 100) || undefined;
-  const { rows, nextCursor } = await listConversations({ accountIds: activeAccounts.map((account) => account.id), accountId, filter, search });
+  const { rows, nextCursor, total } = await listConversations({ accountIds: activeAccounts.map((account) => account.id), accountId, filter, search });
   const selected = params.selected || null;
   const connections = await prisma.whatsAppConnection.findMany({ where: { accountId: { in: activeAccounts.map((account) => account.id) } }, select: { accountId: true, status: true } });
   const connectionStatuses = Object.fromEntries(connections.map((connection) => [connection.accountId, connection.status]));
@@ -38,5 +38,5 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     account: conversation.account,
   }));
 
-  return <InboxClient key={`${accountId || "all"}:${filter}:${search || ""}`} accounts={activeAccounts} initialRows={clientRows} initialNextCursor={nextCursor} initialSelectedId={selected} accountId={accountId} filter={filter} search={search} role={user.role} connectionStatuses={connectionStatuses}/>;
+  return <InboxClient key={`${accountId || "all"}:${filter}:${search || ""}`} accounts={activeAccounts} initialRows={clientRows} initialNextCursor={nextCursor} initialTotal={total} initialSelectedId={selected} accountId={accountId} filter={filter} search={search} role={user.role} connectionStatuses={connectionStatuses}/>;
 }
