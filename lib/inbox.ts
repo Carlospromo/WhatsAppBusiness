@@ -8,6 +8,18 @@ import { visibleConversation } from "./conversation-identity";
 export const conversationPageSize = 100;
 const textLimit = 2000;
 
+/**
+ * Use the final visible item as the cursor. Using the extra look-ahead row
+ * would skip that row when Prisma starts after the cursor on the next page.
+ */
+export function conversationPage<T extends { id: string }>(rows: T[], pageSize = conversationPageSize) {
+  const visibleRows = rows.slice(0, pageSize);
+  return {
+    rows: visibleRows,
+    nextCursor: rows.length > pageSize ? visibleRows.at(-1)?.id ?? null : null,
+  };
+}
+
 export function parseCursor(value: string | null) {
   return value && /^[a-zA-Z0-9_-]{10,40}$/.test(value) ? value : undefined;
 }
@@ -56,8 +68,8 @@ export async function listConversations(query: { accountIds: string[]; accountId
     take: conversationPageSize + 1,
     ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
   });
-  const next = rows.length > conversationPageSize ? rows.pop()!.id : null;
-  return { rows: rows.map(visibleConversation), nextCursor: next };
+  const page = conversationPage(rows);
+  return { rows: page.rows.map(visibleConversation), nextCursor: page.nextCursor };
 }
 
 export async function queueOutboundMessage(conversationId: string, accountId: string, userId: string, body: string) {

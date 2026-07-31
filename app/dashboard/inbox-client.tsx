@@ -128,6 +128,15 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
   const renderedThreadRef = useRef<{ conversationId: string; lastMessageId: string | null } | null>(null);
   const canManage = role === "ADMIN" || role === "AGENT";
 
+  // The selected conversation is part of the URL so refresh/back navigation
+  // remain shareable. Keep the sidebar instance mounted when only that value
+  // changes: it preserves loaded pages, the scroll position and the active
+  // row instead of resetting the list to its first page.
+  useEffect(() => {
+    setSelectedId(initialSelectedId);
+    if (!initialSelectedId) setDetail(null);
+  }, [initialSelectedId]);
+
   const pageUrl = useCallback((changes: { account?: string | null; filter?: string; selected?: string | null } = {}) => {
     const params = new URLSearchParams();
     const selectedAccount = changes.account === undefined ? accountId : changes.account;
@@ -321,7 +330,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
               const name = conversationName(conversation);
               const isSelected = conversation.id === selectedId;
               const external = conversation.contact?.addressBookContact?.origin === "EXTERNAL";
-              return <button key={conversation.id} type="button" onClick={() => selectConversation(conversation.id)} className={`flex w-full gap-3 border-b border-slate-100 px-3 py-3 text-left transition ${isSelected ? "bg-emerald-50" : "hover:bg-slate-50"}`}>
+              return <button key={conversation.id} type="button" onClick={() => selectConversation(conversation.id)} aria-current={isSelected ? "page" : undefined} className={`flex w-full gap-3 border-b border-slate-100 px-3 py-3 text-left transition ${isSelected ? "bg-emerald-50 shadow-[inset_3px_0_0_0_#059669]" : "hover:bg-slate-50"}`}>
                 <ConversationAvatar contact={conversation.contact} name={name} size="small" />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center justify-between gap-2"><strong className="truncate text-sm text-slate-800">{name}</strong>{conversation.lastMessageAt && <time className="shrink-0 text-[11px] text-slate-400">{formatTime(conversation.lastMessageAt)}</time>}</span>
@@ -331,7 +340,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
               </button>;
             }) : <div className="p-8 text-center text-sm text-slate-500"><p className="font-medium text-slate-700">No hay conversaciones</p><p className="mt-1">Los nuevos mensajes aparecerán aquí.</p></div>}
           </div>
-          {nextCursor && <button type="button" onClick={() => void loadMoreConversations()} disabled={loadingMore} className="border-t border-slate-100 px-3 py-3 text-sm font-medium text-emerald-700 disabled:opacity-50">{loadingMore ? "Cargando…" : "Cargar más conversaciones"}</button>}
+          {nextCursor && <button type="button" onClick={() => void loadMoreConversations()} disabled={loadingMore} className="border-t border-slate-100 px-3 py-3 text-sm font-medium text-emerald-700 disabled:opacity-50">{loadingMore ? "Cargando más conversaciones…" : "Cargar más conversaciones"}</button>}
         </aside>
 
         <section className={`min-h-0 flex-col bg-slate-50 ${selectedId ? "flex" : "hidden md:flex"}`}>

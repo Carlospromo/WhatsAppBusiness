@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conversationPageSize, directConversationJid, messagesFromNewestPage, validateMessageBody, parseCursor } from "../lib/inbox";
+import { conversationPage, conversationPageSize, directConversationJid, messagesFromNewestPage, validateMessageBody, parseCursor } from "../lib/inbox";
 import { canManageMessages, canSendMessages } from "../lib/authorization";
 import { outboundDestinationJid, resolveOutboundDestination } from "../lib/whatsapp/outbound-destination";
 import { WhatsAppBridgeType } from "@prisma/client";
@@ -7,6 +7,10 @@ import { WhatsAppBridgeType } from "@prisma/client";
 describe("inbox safety", () => {
   it("validates manual text and cursor values", () => { expect(validateMessageBody(" hola ")).toBe("hola"); expect(validateMessageBody(" ")).toBeNull(); expect(validateMessageBody("x".repeat(2001))).toBeNull(); expect(parseCursor("bad!")).toBeUndefined(); });
   it("uses bounded pages without imposing a small sidebar maximum", () => { expect(conversationPageSize).toBe(100); });
+  it("uses the last visible conversation as cursor without skipping the next one", () => {
+    const page = conversationPage([{ id: "a" }, { id: "b" }, { id: "c" }], 2);
+    expect(page).toEqual({ rows: [{ id: "a" }, { id: "b" }], nextCursor: "b" });
+  });
   it("creates direct browser chat ids only from normalized phone numbers", () => { expect(directConversationJid("+34600000000")).toBe("34600000000@c.us"); expect(directConversationJid("600000000")).toBeNull(); expect(directConversationJid("+00123")).toBeNull(); });
   it("uses browser chat identities or a verified phone for direct conversations", () => {
     expect(outboundDestinationJid({ jid: "123456789@lid", type: "DIRECT", contact: { phone: "+34600000000" } })).toBe("34600000000@c.us");

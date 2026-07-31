@@ -38,5 +38,5 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     account: conversation.account,
   }));
 
-  return <InboxClient key={`${accountId || "all"}:${filter}:${search || ""}:${selected || ""}`} accounts={activeAccounts} initialRows={clientRows} initialNextCursor={nextCursor} initialSelectedId={selected} accountId={accountId} filter={filter} search={search} role={user.role} connectionStatuses={connectionStatuses}/>;
+  return <InboxClient key={`${accountId || "all"}:${filter}:${search || ""}`} accounts={activeAccounts} initialRows={clientRows} initialNextCursor={nextCursor} initialSelectedId={selected} accountId={accountId} filter={filter} search={search} role={user.role} connectionStatuses={connectionStatuses}/>;
 }
