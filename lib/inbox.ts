@@ -2,7 +2,10 @@ import { ConversationType, MessageDirection, OutboundMessageStatus, WhatsAppBrid
 import { prisma } from "./prisma";
 import { visibleConversation } from "./conversation-identity";
 
-const pageSize = 30;
+// The client loads further pages automatically as the operator reaches the
+// bottom of the sidebar. Keep each query bounded, but do not impose a
+// practical maximum on the number of conversations that can be reached.
+export const conversationPageSize = 100;
 const textLimit = 2000;
 
 export function parseCursor(value: string | null) {
@@ -50,10 +53,10 @@ export async function listConversations(query: { accountIds: string[]; accountId
       account: { select: { id: true, name: true, slug: true } },
     },
     orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
+    take: conversationPageSize + 1,
     ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
   });
-  const next = rows.length > pageSize ? rows.pop()!.id : null;
+  const next = rows.length > conversationPageSize ? rows.pop()!.id : null;
   return { rows: rows.map(visibleConversation), nextCursor: next };
 }
 

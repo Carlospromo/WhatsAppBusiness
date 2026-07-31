@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { UIEvent } from "react";
 import { DirectMessageComposer } from "./direct-message-composer";
 import { MessageComposer } from "./message-composer";
 
@@ -276,6 +277,15 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
     }
   }
 
+  function loadMoreWhenSidebarReachesEnd(event: UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget;
+    // Leave a small threshold so the next page is already available before
+    // the operator reaches the visual end of the list.
+    if (element.scrollTop + element.clientHeight >= element.scrollHeight - 120) {
+      void loadMoreConversations();
+    }
+  }
+
   let previousDay = "";
   return (
     <main className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6">
@@ -306,7 +316,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialS
           <nav className="flex gap-1 overflow-x-auto border-b border-slate-100 p-2" aria-label="Filtros">
             {filters.map(([id, label]) => <Link key={id} href={pageUrl({ filter: id, selected: null })} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === id || (id === "all" && !filter) ? "bg-emerald-50 text-emerald-800" : "text-slate-500 hover:bg-slate-50"}`}>{label}</Link>)}
           </nav>
-          <div className="min-h-0 flex-1 overflow-y-scroll [scrollbar-gutter:stable]">
+          <div onScroll={loadMoreWhenSidebarReachesEnd} className="min-h-0 flex-1 overflow-y-scroll [scrollbar-gutter:stable]">
             {rows.length ? rows.map((conversation) => {
               const name = conversationName(conversation);
               const isSelected = conversation.id === selectedId;
