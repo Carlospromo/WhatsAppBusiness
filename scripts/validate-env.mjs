@@ -27,6 +27,7 @@ positiveInteger("WA_WEB_READY_PROBE_DELAY_SECONDS", 25, 5, 90);
 positiveInteger("WA_WEB_HEALTHCHECK_SECONDS", 60, 15, 300);
 positiveInteger("WA_WEB_INBOUND_RECONCILE_SECONDS", 30, 10, 300);
 positiveInteger("WA_WEB_INBOUND_RECONCILE_LIMIT", 25, 1, 100);
+positiveInteger("WA_WEB_CHAT_INDEX_LIMIT", 500, 100, 1000);
 positiveInteger("WA_WEB_MAX_MEDIA_BYTES", 25 * 1024 * 1024, 1, 40 * 1024 * 1024);
 positiveInteger("WA_WEB_MAX_IMAGE_BYTES", 10 * 1024 * 1024, 1, 40 * 1024 * 1024);
 positiveInteger("WA_WEB_MAX_AUDIO_BYTES", 20 * 1024 * 1024, 1, 40 * 1024 * 1024);

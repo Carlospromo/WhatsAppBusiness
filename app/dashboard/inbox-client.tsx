@@ -344,7 +344,7 @@ export function InboxClient({ accounts, initialRows, initialNextCursor, initialT
               </button>;
             }) : <div className="p-8 text-center text-sm text-slate-500"><p className="font-medium text-slate-700">No hay conversaciones</p><p className="mt-1">Los nuevos mensajes aparecerán aquí.</p></div>}
           </div>
-          {nextCursor && <button type="button" onClick={() => void loadMoreConversations()} disabled={loadingMore} className="border-t border-slate-100 px-3 py-3 text-sm font-medium text-emerald-700 disabled:opacity-50">{loadingMore ? "Cargando más conversaciones…" : "Cargar más conversaciones"}</button>}
+          {nextCursor && <button type="button" onClick={() => void loadMoreConversations()} disabled={loadingMore} className="border-t border-slate-100 px-3 py-3 text-sm font-medium text-emerald-700 disabled:opacity-50">{loadingMore ? "Cargando más conversaciones…" : "Cargar 50 conversaciones más"}</button>}
         </aside>
 
         <section className={`min-h-0 flex-col bg-slate-50 ${selectedId ? "flex" : "hidden md:flex"}`}>

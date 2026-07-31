@@ -100,6 +100,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
 | `WA_WEB_INBOUND_RECONCILE_SECONDS` | Respaldo de entradas con APIs públicas del navegador (10–300; predeterminado 30). |
 | `WA_WEB_INBOUND_RECONCILE_LIMIT` | Máximo de mensajes recientes por chat cambiado en cada ciclo (1–100; predeterminado 25). |
+| `WA_WEB_CHAT_INDEX_LIMIT` | Máximo de chats recientes que se indexan al iniciar una sesión (100–1000; predeterminado 500). Solo guarda identidad, tipo y fecha; no importa mensajes históricos. |
 | `WA_WEB_MAX_MEDIA_BYTES`, `WA_WEB_MAX_IMAGE_BYTES`, `WA_WEB_MAX_AUDIO_BYTES`, `WA_WEB_MAX_VIDEO_BYTES` | Límites opcionales: global y por tipo para medios Base64. Si se omiten, se usan 25 MB globales, 10 MB para imágenes, 20 MB para audio y 25 MB para vídeo. |
 | `WA_OUTBOUND_MAX_PENDING`, `WA_OUTBOUND_MAX_PER_MINUTE`, `WA_OUTBOUND_MIN_INTERVAL_SECONDS`, `WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY` | Límites preventivos de envío manual. Valores predeterminados: 10, 3, 15 y 3. |
 | `MEDIA_STORAGE=r2`, `R2_BUCKET`, `R2_ACCOUNT_ID`, `R2_ENDPOINT`, `R2_REGION`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Bucket R2 privado para medios. |

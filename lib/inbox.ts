@@ -6,6 +6,7 @@ import { visibleConversation } from "./conversation-identity";
 // bottom of the sidebar. Keep each query bounded, but do not impose a
 // practical maximum on the number of conversations that can be reached.
 export const conversationPageSize = 100;
+export const subsequentConversationPageSize = 50;
 const textLimit = 2000;
 
 /**
@@ -51,6 +52,10 @@ export async function listConversations(query: { accountIds: string[]; accountId
     ...(query.filter === "group" ? { type: ConversationType.GROUP } : {}),
     ...(search ? { OR: [{ contact: { displayName: { contains: search } } }, { contact: { pushName: { contains: search } } }, { contact: { phone: { contains: search } } }, { contact: { addressBookContact: { displayName: { contains: search } } } }] } : {}),
   };
+  // The first view should provide a useful working set. Subsequent requests
+  // are deliberately smaller, so scrolling remains responsive for accounts
+  // with a long-lived inbox without creating a hard maximum.
+  const pageSize = query.cursor ? subsequentConversationPageSize : conversationPageSize;
   const [rows, total] = await prisma.$transaction([
     prisma.conversation.findMany({
     where,
@@ -66,12 +71,12 @@ export async function listConversations(query: { accountIds: string[]; accountId
       account: { select: { id: true, name: true, slug: true } },
     },
     orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
-    take: conversationPageSize + 1,
+    take: pageSize + 1,
     ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     }),
     prisma.conversation.count({ where }),
   ]);
-  const page = conversationPage(rows);
+  const page = conversationPage(rows, pageSize);
   return { rows: page.rows.map(visibleConversation), nextCursor: page.nextCursor, total };
 }
 
