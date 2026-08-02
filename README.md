@@ -28,7 +28,11 @@ El worker no persiste una copia local del HTML de WhatsApp Web: así evita reuti
 
 ## Agenda y limpieza segura
 
-La agenda es una capa distinta de las conversaciones. Desde **Administración → Agenda híbrida**, un administrador puede usar **Borrar agenda de esta cuenta** y escribir `BORRAR AGENDA` para confirmarlo. La acción elimina únicamente contactos de agenda, teléfonos normalizados y lotes de importación de esa cuenta. Conserva las identidades técnicas de WhatsApp, conversaciones, mensajes, medios, colas y perfiles de sesión.
+La ruta canónica es **`/dashboard/agenda`**. Muestra hasta 100 contactos inicialmente y permite cargar lotes posteriores de 50, siempre dentro de las cuentas autorizadas al usuario. Para administradores, las operaciones están agrupadas bajo **`/dashboard/agenda/manage`**, **`/dashboard/agenda/nuevo`**, **`/dashboard/agenda/importar`** e **`/dashboard/agenda/importaciones`**; las rutas administrativas antiguas redirigen a estas ubicaciones.
+
+La agenda usa el teléfono E.164 por cuenta como clave común. Cuando llega un mensaje directo con un número verificable, se crea o enlaza un contacto `EXTERNAL`; una sincronización conocida de WhatsApp crea `WHATSAPP_SYNC`. Si el número ya existe como `IMPORTED` o `MANUAL`, solo se enlazan los metadatos técnicos y nunca se reemplazan nombre, empresa, correo ni etiquetas internas. Las cargas CSV/XLSX, después de vista previa y confirmación, convierten el contacto coincidente en `IMPORTED`; la creación individual actualiza solo contactos externos o sincronizados y evita sobrescribir uno ya importado o manual. Los eventos concurrentes se resuelven mediante la unicidad `[accountId, normalizedPhone]`.
+
+La agenda es una capa distinta de las conversaciones. Desde **Agenda → Gestionar agenda**, un administrador puede usar **Borrar agenda de esta cuenta** y escribir `BORRAR AGENDA` para confirmarlo. La acción elimina únicamente contactos de agenda, teléfonos normalizados y lotes de importación de esa cuenta. Conserva las identidades técnicas de WhatsApp, conversaciones, mensajes, medios, colas y perfiles de sesión.
 
 Si fuera imprescindible hacerlo desde la consola PostgreSQL de Railway, realiza primero una copia de seguridad y ejecuta estas instrucciones dentro de una única transacción, sustituyendo `<ACCOUNT_ID>` por la cuenta afectada:
 
@@ -100,6 +104,7 @@ Las identidades externas de conversación permiten enlazar chats de WhatsApp Web
 | `WA_ACCOUNT_CHECK_SECONDS` | Frecuencia de supervisión de cuentas activas (5–300). |
 | `WA_WEB_INBOUND_RECONCILE_SECONDS` | Respaldo de entradas con APIs públicas del navegador (10–300; predeterminado 30). |
 | `WA_WEB_INBOUND_RECONCILE_LIMIT` | Máximo de mensajes recientes por chat cambiado en cada ciclo (1–100; predeterminado 25). |
+| `WA_WEB_CHAT_INDEX_LIMIT` | Máximo de chats recientes que se indexan al iniciar una sesión (100–1000; predeterminado 500). Solo guarda identidad, tipo y fecha; no importa mensajes históricos. |
 | `WA_WEB_MAX_MEDIA_BYTES`, `WA_WEB_MAX_IMAGE_BYTES`, `WA_WEB_MAX_AUDIO_BYTES`, `WA_WEB_MAX_VIDEO_BYTES` | Límites opcionales: global y por tipo para medios Base64. Si se omiten, se usan 25 MB globales, 10 MB para imágenes, 20 MB para audio y 25 MB para vídeo. |
 | `WA_OUTBOUND_MAX_PENDING`, `WA_OUTBOUND_MAX_PER_MINUTE`, `WA_OUTBOUND_MIN_INTERVAL_SECONDS`, `WA_OUTBOUND_MAX_NEW_CHATS_PER_DAY` | Límites preventivos de envío manual. Valores predeterminados: 10, 3, 15 y 3. |
 | `MEDIA_STORAGE=r2`, `R2_BUCKET`, `R2_ACCOUNT_ID`, `R2_ENDPOINT`, `R2_REGION`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Bucket R2 privado para medios. |

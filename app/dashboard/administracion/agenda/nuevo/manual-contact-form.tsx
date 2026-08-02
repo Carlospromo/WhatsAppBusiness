@@ -14,7 +14,13 @@ export function ManualAddressBookContactForm({ accounts }: { accounts: { id: str
     setCreatedId(null);
     const response = await fetch("/api/address-book", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) return setStatus(data.error || "No se pudo guardar el contacto.");
+    if (!response.ok) {
+      if (response.status === 409 && typeof data.id === "string") {
+        setCreatedId(data.id);
+        return setStatus("Ese teléfono ya pertenece a un contacto importado o manual. Puedes abrirlo desde aquí.");
+      }
+      return setStatus(data.error || "No se pudo guardar el contacto.");
+    }
     setCreatedId(data.id);
     setStatus(data.status === "UPDATED" ? "Se han actualizado los datos de agenda del contacto existente." : "Contacto creado correctamente.");
     event.currentTarget.reset();

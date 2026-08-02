@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { AddressBookContactOrigin, MediaAttachmentStatus, WhatsAppBridgeType } from "@prisma/client";
+import { AddressBookContactOrigin, ConversationType, MediaAttachmentStatus, WhatsAppBridgeType } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { phoneFromJid, reconcileWhatsAppContact } from "@/lib/address-book";
 import { previewForMessage, phoneFromWebChatId, type NormalizedWebMessage } from "./normalize-web-message";
@@ -17,6 +17,59 @@ export async function upsertContact(accountId: string, contact: { chatId: string
     pushName: contact.pushName,
     origin: AddressBookContactOrigin.WHATSAPP_SYNC,
   });
+}
+
+export type IndexedWebChat = {
+  chatId: string;
+  type: ConversationType;
+  timestamp: Date;
+  displayName?: string | null;
+};
+
+/**
+ * Indexes an already-existing WhatsApp Web chat without reading its message
+ * history. This makes a linked account's recent chat list visible in the
+ * inbox while keeping historical message import explicitly out of scope.
+ */
+export async function indexWebChat(accountId: string, chat: IndexedWebChat) {
+  const phone = chat.type === ConversationType.DIRECT ? phoneFromWebChatId(chat.chatId) : null;
+  const contact = phone
+    ? await reconcileWhatsAppContact(accountId, {
+      jid: chat.chatId,
+      phoneJid: chat.chatId,
+      displayName: chat.displayName,
+      origin: AddressBookContactOrigin.WHATSAPP_SYNC,
+    })
+    : null;
+  const existingIdentity = await prisma.conversationExternalIdentity.findUnique({
+    where: { accountId_bridgeType_externalChatId: { accountId, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: chat.chatId } },
+    select: { conversationId: true },
+  });
+  const legacyConversation = existingIdentity
+    ? await prisma.conversation.findUnique({ where: { id: existingIdentity.conversationId }, select: { id: true } })
+    : phone
+      ? await prisma.conversation.findFirst({
+        where: { accountId, type: ConversationType.DIRECT, OR: [{ jid: chat.chatId }, { contact: { phone } }, { contact: { addressBookContact: { phones: { some: { normalizedPhone: phone } } } } }] },
+        orderBy: { lastMessageAt: "desc" },
+        select: { id: true },
+      })
+      : await prisma.conversation.findUnique({ where: { accountId_jid: { accountId, jid: chat.chatId } }, select: { id: true } });
+  const conversation = legacyConversation ?? await prisma.conversation.create({
+    data: { accountId, jid: chat.chatId, type: chat.type, contactId: contact?.id ?? null, lastMessageAt: chat.timestamp },
+    select: { id: true },
+  });
+  await prisma.$transaction([
+    prisma.conversationExternalIdentity.upsert({
+      where: { accountId_bridgeType_externalChatId: { accountId, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: chat.chatId } },
+      create: { accountId, conversationId: conversation.id, bridgeType: WhatsAppBridgeType.WWEBJS, externalChatId: chat.chatId, type: chat.type, normalizedPhone: phone },
+      update: { normalizedPhone: phone },
+    }),
+    prisma.conversation.updateMany({
+      where: { id: conversation.id, OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: chat.timestamp } }] },
+      data: { lastMessageAt: chat.timestamp, contactId: contact?.id ?? undefined },
+    }),
+  ]);
+  return { created: !legacyConversation, conversationId: conversation.id };
 }
 
 /**

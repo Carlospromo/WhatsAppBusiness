@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { conversationPage, conversationPageSize, directConversationJid, messagesFromNewestPage, validateMessageBody, parseCursor } from "../lib/inbox";
+import { conversationPage, conversationPageSize, subsequentConversationPageSize, directConversationJid, messagesFromNewestPage, validateMessageBody, parseCursor } from "../lib/inbox";
 import { canManageMessages, canSendMessages } from "../lib/authorization";
 import { outboundDestinationJid, resolveOutboundDestination } from "../lib/whatsapp/outbound-destination";
 import { WhatsAppBridgeType } from "@prisma/client";
 
 describe("inbox safety", () => {
   it("validates manual text and cursor values", () => { expect(validateMessageBody(" hola ")).toBe("hola"); expect(validateMessageBody(" ")).toBeNull(); expect(validateMessageBody("x".repeat(2001))).toBeNull(); expect(parseCursor("bad!")).toBeUndefined(); });
-  it("uses bounded pages without imposing a small sidebar maximum", () => { expect(conversationPageSize).toBe(100); });
+  it("uses a useful first page and smaller subsequent pages without an inbox maximum", () => { expect(conversationPageSize).toBe(100); expect(subsequentConversationPageSize).toBe(50); });
   it("uses the last visible conversation as cursor without skipping the next one", () => {
     const page = conversationPage([{ id: "a" }, { id: "b" }, { id: "c" }], 2);
     expect(page).toEqual({ rows: [{ id: "a" }, { id: "b" }], nextCursor: "b" });

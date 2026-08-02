@@ -3,11 +3,11 @@ import "dotenv/config";
 import { mkdir, rm } from "node:fs/promises";
 import whatsappWeb from "whatsapp-web.js";
 import type { Client as WhatsAppWebClient, Contact, Message } from "whatsapp-web.js";
-import { WhatsAppBridgeType, WhatsAppConnectionStatus } from "@prisma/client";
+import { ConversationType, WhatsAppBridgeType, WhatsAppConnectionStatus } from "@prisma/client";
 import { prisma } from "./lib/prisma";
 import { auditConnection, updateConnection } from "./lib/whatsapp/connection";
 import { maskPhone, normalizeWebMessage, type WebMessageLike } from "./lib/whatsapp/normalize-web-message";
-import { linkLidContactToPhone, persistMessage, upsertContact } from "./lib/whatsapp/persistence";
+import { indexWebChat, linkLidContactToPhone, persistMessage, upsertContact } from "./lib/whatsapp/persistence";
 import { refreshContactProfilePicture, refreshRecentContactProfilePictures } from "./lib/whatsapp/profile-picture";
 import { attachOutboundExternalId, cancelOutboundDelivery, cancelOutboundRequest, claimNextOutboundRequest, completeOutboundRequest, failStaleOutboundRequests, recordOutboundRelayAccepted } from "./lib/whatsapp/outbound";
 import { resolveOutboundDestination } from "./lib/whatsapp/outbound-destination";
@@ -33,6 +33,9 @@ const readinessProbeDelayMs = Math.min(
 const accountCheckMs = Math.max(5_000, Number(process.env.WA_ACCOUNT_CHECK_SECONDS ?? 15) * 1_000);
 const inboundReconcileMs = Math.max(10_000, Number(process.env.WA_WEB_INBOUND_RECONCILE_SECONDS ?? 30) * 1_000);
 const inboundReconcileLimit = Math.max(1, Math.min(100, Number(process.env.WA_WEB_INBOUND_RECONCILE_LIMIT ?? 25)));
+// This indexes recent chats only; it never fetches or persists old message
+// bodies. A bounded index makes the inbox useful immediately after linking.
+const inboxChatIndexLimit = Math.max(100, Math.min(1_000, Number(process.env.WA_WEB_CHAT_INDEX_LIMIT ?? 500)));
 // A Chromium process can become idle or lose its WebSocket without causing the
 // Node worker to exit. Probe the public client state at a low frequency so the
 // worker can recreate only an unhealthy browser and keep live inbound events
@@ -261,6 +264,28 @@ function chatSnapshots(chats: Awaited<ReturnType<WhatsAppWebClient["getChats"]>>
   });
 }
 
+async function syncRecentConversationIndex(accountId: string, client: WhatsAppWebClient) {
+  try {
+    const chats = await client.getChats();
+    const recentChats = chats.flatMap((chat) => {
+      const chatId = serializedWebId(chat.id);
+      const timestamp = typeof chat.timestamp === "number" && Number.isSafeInteger(chat.timestamp) && chat.timestamp > 0 ? chat.timestamp : null;
+      const type = chat.isGroup ? ConversationType.GROUP : (chatId?.endsWith("@c.us") || chatId?.endsWith("@lid")) ? ConversationType.DIRECT : null;
+      return chatId && timestamp && type ? [{ chatId, type, timestamp: new Date(timestamp * 1_000), displayName: typeof chat.name === "string" ? chat.name.slice(0, 200) : null }] : [];
+    }).sort((left, right) => right.timestamp.getTime() - left.timestamp.getTime()).slice(0, inboxChatIndexLimit);
+    let created = 0;
+    for (const chat of recentChats) {
+      const indexed = await indexWebChat(accountId, chat);
+      if (indexed.created) created += 1;
+    }
+    operationalLog("inbox.chat_index_completed", { account: safeLogRef(accountId), indexed: recentChats.length, created });
+  } catch (error) {
+    // The realtime listeners remain the primary receiver. A current Web build
+    // can reject its optional chat-list API without invalidating the session.
+    operationalLog("inbox.chat_index_unavailable", { account: safeLogRef(accountId), ...safeErrorInfo(error) }, "error");
+  }
+}
+
 async function primeInboundReconciliation(accountId: string, client: WhatsAppWebClient) {
   try {
     const chats = await client.getChats();
@@ -303,6 +328,7 @@ function schedulePostReadyMaintenance(accountId: string, client: WhatsAppWebClie
         // linked session remain usable while an operator corrects R2 access.
         operationalLog("media.storage_access_failed", { account: safeLogRef(accountId), provider: "R2", ...safeErrorInfo(error) }, "error");
       }
+      await syncRecentConversationIndex(accountId, client);
       await syncKnownContacts(accountId, client);
       await refreshRecentContactProfilePictures(accountId, client);
       await recoverPendingMedia(accountId, client);
