@@ -172,16 +172,26 @@ export async function reconcileWhatsAppContact(accountId: string, input: { jid: 
   if (!phone) return technical;
   const known = await prisma.addressBookPhone.findUnique({ where: { accountId_normalizedPhone: { accountId, normalizedPhone: phone } }, include: { addressBookContact: true } });
   if (known) return prisma.contact.update({ where: { id: technical.id }, data: { addressBookContactId: known.addressBookContactId } });
-  const addressBookContact = await prisma.addressBookContact.create({
-    data: {
-      accountId,
-      displayName: input.displayName?.trim() || input.pushName?.trim() || (input.origin === AddressBookContactOrigin.EXTERNAL ? "Contacto externo" : "Contacto de WhatsApp"),
-      origin: input.origin,
-      status: input.origin === AddressBookContactOrigin.EXTERNAL ? AddressBookContactStatus.EXTERNAL : AddressBookContactStatus.VERIFIED,
-      phones: { create: { accountId, normalizedPhone: phone } },
-    },
-  });
-  return prisma.contact.update({ where: { id: technical.id }, data: { addressBookContactId: addressBookContact.id } });
+  try {
+    const addressBookContact = await prisma.addressBookContact.create({
+      data: {
+        accountId,
+        displayName: input.displayName?.trim() || input.pushName?.trim() || (input.origin === AddressBookContactOrigin.EXTERNAL ? "Contacto externo" : "Contacto de WhatsApp"),
+        origin: input.origin,
+        status: input.origin === AddressBookContactOrigin.EXTERNAL ? AddressBookContactStatus.EXTERNAL : AddressBookContactStatus.VERIFIED,
+        phones: { create: { accountId, normalizedPhone: phone } },
+      },
+    });
+    return prisma.contact.update({ where: { id: technical.id }, data: { addressBookContactId: addressBookContact.id } });
+  } catch (error) {
+    // Contact and message events can arrive almost together. The unique phone
+    // constraint is the authority: if another event won the race, link the
+    // same technical identity to that one instead of creating a duplicate.
+    if ((error as { code?: string }).code !== "P2002") throw error;
+    const winner = await prisma.addressBookPhone.findUnique({ where: { accountId_normalizedPhone: { accountId, normalizedPhone: phone } } });
+    if (!winner) throw error;
+    return prisma.contact.update({ where: { id: technical.id }, data: { addressBookContactId: winner.addressBookContactId } });
+  }
 }
 
 export async function reconcileExistingContacts(accountId: string) {

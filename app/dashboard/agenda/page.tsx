@@ -1,16 +1,37 @@
-import Link from "next/link";
+import { AddressBookContactOrigin, AddressBookContactStatus } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { accountsForUser, canAccessAccount } from "@/lib/account";
-import { prisma } from "@/lib/prisma";
+import { listAddressBookContacts } from "@/lib/address-book-list";
+import { AgendaClient } from "./agenda-client";
 
-function mask(phone: string | undefined) { return phone ? `•••• ${phone.slice(-4)}` : "Número no disponible"; }
-const labels: Record<string, string> = { IMPORTED: "Importado", WHATSAPP_SYNC: "Sincronizado", EXTERNAL: "Externo", MANUAL: "Manual" };
+const origins = new Set(Object.values(AddressBookContactOrigin));
+const statuses = new Set(Object.values(AddressBookContactStatus));
 
-export default async function AddressBookPage({ searchParams }: { searchParams: Promise<{ account?: string; q?: string; origin?: string }> }) {
-  const user = await getCurrentUser(); if (!user) return null; const params = await searchParams;
-  const accounts = await accountsForUser(user); const accountId = params.account && await canAccessAccount(user, params.account) ? params.account : undefined;
-  const allowed = accounts.filter((account) => account.isActive).map((account) => account.id); const q = params.q?.trim().slice(0, 100); const origin = ["IMPORTED", "WHATSAPP_SYNC", "EXTERNAL", "MANUAL"].includes(params.origin || "") ? params.origin as "IMPORTED" : undefined;
-  const rows = await prisma.addressBookContact.findMany({ where: { accountId: accountId ?? { in: allowed }, ...(origin ? { origin } : {}), ...(q ? { OR: [{ displayName: { contains: q } }, { lastName: { contains: q } }, { company: { contains: q } }, { email: { contains: q } }, { phones: { some: { normalizedPhone: { contains: q.replace(/\s/g, "") } } } }] } : {}) }, include: { account: { select: { name: true } }, phones: { select: { normalizedPhone: true }, take: 1 }, whatsappContacts: { select: { conversations: { select: { id: true }, take: 1 } }, take: 1 } }, orderBy: { displayName: "asc" }, take: 30 });
-  const query = accountId ? `&account=${accountId}` : "";
-  return <main className="mx-auto max-w-5xl p-4 sm:p-6"><div className="flex items-center justify-between gap-4"><div><Link href="/dashboard" className="text-sm text-emerald-700">← Conversaciones</Link><h1 className="mt-2 text-xl font-semibold">Agenda</h1></div>{user.role === "ADMIN" && <div className="flex gap-3"><Link href="/dashboard/administracion/agenda/nuevo" className="text-sm font-medium text-emerald-700">Añadir contacto</Link><Link href="/dashboard/administracion/agenda" className="text-sm font-medium text-emerald-700">Administrar agenda</Link></div>}</div><nav className="mt-4 flex gap-3 overflow-auto text-sm"><Link href="/dashboard/agenda" className={!accountId ? "font-semibold text-emerald-700" : "text-slate-500"}>Todas</Link>{accounts.map((account) => <Link key={account.id} href={`/dashboard/agenda?account=${account.id}`} className={accountId === account.id ? "font-semibold text-emerald-700" : "text-slate-500"}>{account.name}</Link>)}</nav><form className="my-4 flex gap-2"><input type="hidden" name="account" value={accountId || ""}/><input name="q" defaultValue={params.q} placeholder="Buscar por nombre, empresa o teléfono" className="min-w-0 flex-1 rounded-md border p-2"/><select name="origin" defaultValue={origin || ""} className="rounded-md border p-2"><option value="">Todos los orígenes</option><option value="IMPORTED">Importados</option><option value="WHATSAPP_SYNC">Sincronizados</option><option value="EXTERNAL">Externos</option><option value="MANUAL">Manuales</option></select><button className="rounded-md bg-emerald-700 px-3 text-sm text-white">Buscar</button></form><div className="overflow-hidden rounded-xl border">{rows.length ? rows.map((contact) => <article key={contact.id} className="flex items-center justify-between gap-3 border-b p-4 last:border-0"><div className="min-w-0"><Link href={`/dashboard/agenda/${contact.id}`} className="font-medium hover:text-emerald-700">{contact.displayName}{contact.lastName ? ` ${contact.lastName}` : ""}</Link><p className="text-sm text-slate-500">{mask(contact.phones[0]?.normalizedPhone)}{contact.company ? ` · ${contact.company}` : ""}</p>{!accountId && <p className="text-xs text-slate-400">{contact.account.name}</p>}</div><div className="flex items-center gap-3"><span className={contact.origin === "EXTERNAL" ? "rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-800" : "rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600"}>{labels[contact.origin]}</span>{contact.whatsappContacts[0]?.conversations[0] && <Link className="text-sm text-emerald-700" href={`/dashboard?selected=${contact.whatsappContacts[0].conversations[0].id}${query}`}>Conversación</Link>}</div></article>) : <p className="p-5 text-sm text-slate-500">No hay contactos de agenda para este filtro.</p>}</div></main>;
+function mask(phone: string | undefined) {
+  return phone ? `•••• ${phone.slice(-4)}` : null;
+}
+
+export default async function AddressBookPage({ searchParams }: { searchParams: Promise<{ account?: string; q?: string; origin?: string; status?: string; conversation?: string }> }) {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const params = await searchParams;
+  const accounts = (await accountsForUser(user)).filter((account) => account.isActive);
+  const accountId = params.account && await canAccessAccount(user, params.account) ? params.account : undefined;
+  const origin = origins.has(params.origin as AddressBookContactOrigin) ? params.origin as AddressBookContactOrigin : undefined;
+  const status = statuses.has(params.status as AddressBookContactStatus) ? params.status as AddressBookContactStatus : undefined;
+  const conversation = params.conversation === "with" || params.conversation === "without" ? params.conversation : undefined;
+  const { rows, total, nextCursor } = await listAddressBookContacts({
+    accountIds: accounts.map((account) => account.id), accountId, q: params.q, origin, status, conversation,
+  });
+  const clientRows = rows.map((contact) => ({
+    id: contact.id, account: contact.account, displayName: contact.displayName, lastName: contact.lastName,
+    company: contact.company, origin: contact.origin, status: contact.status,
+    phone: mask(contact.phones[0]?.normalizedPhone), conversationId: contact.whatsappContacts[0]?.conversations[0]?.id ?? null,
+  }));
+  return <AgendaClient
+    accounts={accounts.map(({ id, name }) => ({ id, name }))}
+    initialRows={clientRows} initialTotal={total} initialNextCursor={nextCursor}
+    accountId={accountId} q={params.q?.trim().slice(0, 100) || undefined}
+    origin={origin} status={status} conversation={conversation} admin={user.role === "ADMIN"}
+  />;
 }

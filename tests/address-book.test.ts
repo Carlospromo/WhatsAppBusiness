@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 import { previewImport, normalizePhone, phoneFromJid, validCountry, validateManualAddressBookContact } from "../lib/address-book";
 import { canLinkAddressBookContact, canManageAddressBook } from "../lib/authorization";
+import { addressBookPage, firstAddressBookPageSize, subsequentAddressBookPageSize } from "../lib/address-book-list";
 
 describe("hybrid address book", () => {
   it("normalizes direct WhatsApp identities and imported phones", () => {
@@ -40,5 +41,11 @@ describe("hybrid address book", () => {
     expect(validateManualAddressBookContact({ nombre: "Ana", telefono: "600 000 000", email: "ana@example.com", empresa: "Acme" }, "ES")).toMatchObject({ displayName: "Ana", normalizedPhone: "+34600000000" });
     expect(validateManualAddressBookContact({ nombre: "<script>", telefono: "600000000" }, "ES")).toBeNull();
     expect(validateManualAddressBookContact({ nombre: "Ana", telefono: "600000000", email: "incorrecto" }, "ES")).toBeNull();
+  });
+
+  it("loads all address-book pages without dropping the first contact of the next page", () => {
+    expect(firstAddressBookPageSize).toBe(100);
+    expect(subsequentAddressBookPageSize).toBe(50);
+    expect(addressBookPage([{ id: "a" }, { id: "b" }, { id: "c" }], 2)).toEqual({ rows: [{ id: "a" }, { id: "b" }], nextCursor: "b" });
   });
 });

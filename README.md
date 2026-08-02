@@ -28,7 +28,11 @@ El worker no persiste una copia local del HTML de WhatsApp Web: así evita reuti
 
 ## Agenda y limpieza segura
 
-La agenda es una capa distinta de las conversaciones. Desde **Administración → Agenda híbrida**, un administrador puede usar **Borrar agenda de esta cuenta** y escribir `BORRAR AGENDA` para confirmarlo. La acción elimina únicamente contactos de agenda, teléfonos normalizados y lotes de importación de esa cuenta. Conserva las identidades técnicas de WhatsApp, conversaciones, mensajes, medios, colas y perfiles de sesión.
+La ruta canónica es **`/dashboard/agenda`**. Muestra hasta 100 contactos inicialmente y permite cargar lotes posteriores de 50, siempre dentro de las cuentas autorizadas al usuario. Para administradores, las operaciones están agrupadas bajo **`/dashboard/agenda/manage`**, **`/dashboard/agenda/nuevo`**, **`/dashboard/agenda/importar`** e **`/dashboard/agenda/importaciones`**; las rutas administrativas antiguas redirigen a estas ubicaciones.
+
+La agenda usa el teléfono E.164 por cuenta como clave común. Cuando llega un mensaje directo con un número verificable, se crea o enlaza un contacto `EXTERNAL`; una sincronización conocida de WhatsApp crea `WHATSAPP_SYNC`. Si el número ya existe como `IMPORTED` o `MANUAL`, solo se enlazan los metadatos técnicos y nunca se reemplazan nombre, empresa, correo ni etiquetas internas. Las cargas CSV/XLSX, después de vista previa y confirmación, convierten el contacto coincidente en `IMPORTED`; la creación individual actualiza solo contactos externos o sincronizados y evita sobrescribir uno ya importado o manual. Los eventos concurrentes se resuelven mediante la unicidad `[accountId, normalizedPhone]`.
+
+La agenda es una capa distinta de las conversaciones. Desde **Agenda → Gestionar agenda**, un administrador puede usar **Borrar agenda de esta cuenta** y escribir `BORRAR AGENDA` para confirmarlo. La acción elimina únicamente contactos de agenda, teléfonos normalizados y lotes de importación de esa cuenta. Conserva las identidades técnicas de WhatsApp, conversaciones, mensajes, medios, colas y perfiles de sesión.
 
 Si fuera imprescindible hacerlo desde la consola PostgreSQL de Railway, realiza primero una copia de seguridad y ejecuta estas instrucciones dentro de una única transacción, sustituyendo `<ACCOUNT_ID>` por la cuenta afectada:
 
